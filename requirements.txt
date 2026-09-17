@@ -1,0 +1,11 @@
+discord.py
+Flask
+aiohttp
+python-dotenv
+firebase-admin
+geopandas
+matplotlib
+shapely
+pillow
+numpy
+requests

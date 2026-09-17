@@ -1,0 +1,434 @@
+import asyncio
+import contextlib
+import difflib
+import logging
+import os
+
+import subprocess
+import threading
+
+import discord
+from discord import app_commands
+from dotenv import load_dotenv
+from discord.ext import commands
+
+from web.dashboard import app as flask_app
+from bot.database import Database
+from bot.civilization import CivilizationManager
+from bot.commands.basic import BasicCommands
+from bot.commands.economy import EconomyCommands
+from bot.commands.ExtraEconomy import setup as setup_extra_economy
+from bot.commands.military import MilitaryCommands
+from bot.commands.diplomacy import DiplomacyCommands
+from bot.commands.store import StoreCommands
+from bot.commands.hyperitems import HyperItemCommands
+from bot.commands.admin import AdminCommands
+from bot.commands.industrial import IndustrialCog
+from bot.commands.territory import TerritoryCog
+from bot.commands.map_cog import MapCog
+from bot.commands.countryballs import CountryballCog
+from bot.commands.unions import UnionCommands
+from bot.events import EventManager
+from bot import config
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('warbot.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+
+def get_db_path() -> str:
+    return os.getenv("DATABASE_PATH", "warbot.db")
+
+
+class WarBot(commands.Bot):
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.message_content = True
+        intents.members = True
+        intents.guilds = True
+
+        super().__init__(
+            command_prefix=commands.when_mentioned_or('.'),
+            intents=intents,
+            case_insensitive=True
+        )
+
+        self.db = Database(db_path=get_db_path())
+        self.civ_manager = CivilizationManager(self.db)
+        self.event_manager = EventManager(self.db)
+        self.events_task = None
+        self.happiness_task = None
+
+    async def _auto_sync_commands(self):
+        do_sync = os.getenv("AUTO_SYNC_COMMANDS", "false").lower() in {"1", "true", "yes", "on"}
+        if not do_sync:
+            logger.info("AUTO_SYNC_COMMANDS disabled; skipping startup command sync")
+            return
+
+        test_guild_id = os.getenv("TEST_GUILD_ID")
+        if test_guild_id:
+            try:
+                guild_obj = discord.Object(id=int(test_guild_id))
+                self.tree.copy_global_to(guild=guild_obj)
+                synced_guild = await self.tree.sync(guild=guild_obj)
+                logger.info(f"Auto-synced {len(synced_guild)} commands to test guild {test_guild_id}")
+            except Exception as e:
+                logger.error(f"Failed guild auto-sync for TEST_GUILD_ID={test_guild_id}: {e}", exc_info=True)
+
+        try:
+            synced_global = await self.tree.sync()
+            logger.info(f"Auto-synced {len(synced_global)} global app commands")
+        except Exception as e:
+            logger.error(f"Failed global auto-sync: {e}", exc_info=True)
+
+    # =================================================================
+    # HAPPINESS EFFECTS LOOP
+    # =================================================================
+    async def _happiness_effects_loop(self):
+        """Every 5 minutes, apply negative/positive happiness consequences to every civ.
+
+        Without this, negative happiness does nothing over time. This is what
+        turns '.tax' into an actual risk.
+        """
+        await self.wait_until_ready()
+        logger.info("Happiness effects loop started")
+        while not self.is_closed():
+            try:
+                await asyncio.sleep(300)  # 5 minutes
+                civs = self.db.get_all_civilizations()
+                for civ in civs:
+                    uid = civ.get('user_id')
+                    if not uid:
+                        continue
+                    try:
+                        self.civ_manager.apply_happiness_effects(uid)
+                    except Exception as e:
+                        logger.error(f"Happiness effect error for {uid}: {e}")
+            except asyncio.CancelledError:
+                logger.info("Happiness effects loop cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Happiness loop error: {e}", exc_info=True)
+                # Don't die — wait a bit and continue
+                await asyncio.sleep(60)
+
+    # =================================================================
+    # SETUP HOOK
+    # =================================================================
+    async def setup_hook(self):
+        # --- Generate regions.geojson if missing ---
+        if not os.path.exists("regions.geojson") or not os.path.exists("province_areas.json"):
+            logger.info("🌍 Geo data not found – generating it now...")
+            try:
+                result = await asyncio.to_thread(
+                    subprocess.run,
+                    ["python", "generate_geojson.py"],
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode == 0:
+                    logger.info("✅ Geo data generated successfully!")
+                else:
+                    logger.error(f"❌ Generation failed (code {result.returncode}): {result.stderr}")
+                    if not os.path.exists("regions.geojson"):
+                        with open("regions.geojson", "w") as f:
+                            f.write('{"type":"FeatureCollection","features":[]}')
+                        logger.warning("⚠️ Created empty regions.geojson as fallback.")
+            except Exception as e:
+                logger.error(f"❌ Error running generator: {e}")
+                if not os.path.exists("regions.geojson"):
+                    with open("regions.geojson", "w") as f:
+                        f.write('{"type":"FeatureCollection","features":[]}')
+                    logger.warning("⚠️ Created empty regions.geojson as fallback.")
+        else:
+            logger.info("✅ Geo data already exists.")
+
+        # --- Load all cogs ---
+        try:
+            await self.add_cog(BasicCommands(self))
+
+            try:
+                await self.add_cog(EconomyCommands(self))
+                logger.info("Legacy EconomyCommands cog loaded successfully")
+            except Exception as e:
+                logger.error(f"Failed to load legacy EconomyCommands cog: {e}", exc_info=True)
+
+            try:
+                await setup_extra_economy(self, db=self.db, storage_dir="./data")
+                logger.info("ExtraEconomy cog loaded successfully")
+            except Exception as e:
+                logger.error(f"Failed to load ExtraEconomy cog: {e}", exc_info=True)
+
+            await self.add_cog(MilitaryCommands(self))
+            await self.add_cog(DiplomacyCommands(self))
+            await self.add_cog(StoreCommands(self))
+            await self.add_cog(HyperItemCommands(self))
+            await self.add_cog(AdminCommands(self))
+            await self.add_cog(IndustrialCog(self))
+            logger.info("IndustrialCog loaded successfully")
+            await self.add_cog(TerritoryCog(self))
+            logger.info("TerritoryCog loaded successfully")
+            await self.add_cog(MapCog(self))
+            logger.info("MapCog loaded successfully")
+            await self.add_cog(CountryballCog(self))
+            logger.info("CountryballCog loaded successfully")
+            await self.add_cog(UnionCommands(self))
+            logger.info("UnionCommands loaded successfully")
+
+            logger.info("All command cogs loaded successfully")
+            await self._auto_sync_commands()
+        except Exception as e:
+            logger.error(f"Error loading cogs: {e}", exc_info=True)
+
+        # --- Start background tasks ---
+        if self.events_task is None or self.events_task.done():
+            self.events_task = asyncio.create_task(self.event_manager.start_random_events(self))
+
+        if self.happiness_task is None or self.happiness_task.done():
+            self.happiness_task = asyncio.create_task(self._happiness_effects_loop())
+
+    async def on_ready(self):
+        logger.info(f'{self.user} has connected to Discord!')
+        print(f'WarBot is online as {self.user}')
+
+    async def on_message(self, message: discord.Message):
+        if message.author == self.user:
+            return
+        await self.process_commands(message)
+
+        # ---- VICTORY CHECK AFTER ANY COMMAND ----
+        if not message.author.bot:
+            try:
+                await self.check_victory(str(message.author.id), message)
+            except Exception as e:
+                logger.error(f"Victory check failed: {e}")
+
+    def _get_command_suggestions(self, attempted: str, limit: int = 5):
+        if not attempted:
+            return []
+        attempted = attempted.lower().strip()
+        all_names = set()
+        for cmd in self.commands:
+            all_names.add(cmd.name.lower())
+            for alias in getattr(cmd, "aliases", []):
+                all_names.add(alias.lower())
+        return difflib.get_close_matches(attempted, sorted(all_names), n=limit, cutoff=0.45)
+
+    # =================================================================
+    # ERROR HANDLERS (safe against dead interactions)
+    # =================================================================
+    async def on_command_error(self, ctx, error):
+        if hasattr(ctx.command, "on_error"):
+            return
+
+        async def _safe_send(content=None, **kwargs):
+            """Send via ctx.send, swallowing errors from expired/responded interactions."""
+            try:
+                await ctx.send(content, **kwargs)
+            except (discord.NotFound, discord.HTTPException, discord.InteractionResponded):
+                logger.warning("Could not deliver error message (interaction dead/responded)")
+            except Exception:
+                logger.exception("Unexpected error sending error message")
+
+        if isinstance(error, commands.CommandNotFound):
+            attempted = (ctx.invoked_with or "").strip()
+            suggestions = self._get_command_suggestions(attempted)
+            if suggestions:
+                suggested_text = "\n".join([f"• `/{name}` or `.{name}`" for name in suggestions])
+                await _safe_send(
+                    f"❌ Command `.{attempted}` not found.\n"
+                    f"Did you mean:\n{suggested_text}\n\n"
+                    "Use `.warhelp` to browse commands."
+                )
+            else:
+                await _safe_send(
+                    f"❌ Command `.{attempted}` not found.\n"
+                    "Use `.warhelp` to browse commands."
+                )
+            return
+
+        if isinstance(error, commands.MissingRequiredArgument):
+            await _safe_send(
+                f"❌ Missing required argument: `{error.param.name}`.\n"
+                "Use `.warhelp` for usage examples."
+            )
+            return
+
+        if isinstance(error, commands.BadArgument):
+            await _safe_send(
+                "❌ Invalid argument type or value.\n"
+                "Please check command usage with `.warhelp`."
+            )
+            return
+
+        if isinstance(error, commands.CheckFailure):
+            await _safe_send("❌ You don't have permission to use that command.")
+            return
+
+        if isinstance(error, commands.CommandOnCooldown):
+            await _safe_send(
+                f"⏳ This command is on cooldown. Try again in `{error.retry_after:.1f}s`."
+            )
+            return
+
+        logger.error(f"Unhandled command error in '{ctx.invoked_with}': {error}", exc_info=True)
+        await _safe_send("❌ Something went wrong while running that command. Please try again.")
+
+    async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        message = "❌ Something went wrong while running that slash command."
+
+        if isinstance(error, app_commands.CommandOnCooldown):
+            message = f"⏳ This command is on cooldown. Try again in `{error.retry_after:.1f}s`."
+        elif isinstance(error, app_commands.CheckFailure):
+            message = "❌ You don't have permission to use that command."
+        elif isinstance(error, app_commands.CommandInvokeError):
+            logger.error(f"Slash command invoke error: {error}", exc_info=True)
+            message = "❌ That command failed while executing. Please try again."
+        else:
+            logger.error(f"Unhandled app command error: {error}", exc_info=True)
+
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except (discord.NotFound, discord.HTTPException, discord.InteractionResponded):
+            logger.warning("Could not deliver slash command error (interaction dead/responded)")
+        except Exception:
+            logger.exception("Failed to deliver app command error message")
+
+    # =================================================================
+    # VICTORY CHECKING
+    # =================================================================
+    async def check_victory(self, user_id: str, ctx_or_message=None):
+        """Check if a player has achieved any victory condition."""
+        civ = self.civ_manager.get_civilization(user_id)
+        if not civ:
+            return
+
+        if civ.get("victory_achieved", False):
+            return
+
+        result = self.db.check_victory(user_id)
+        if not result:
+            return
+
+        self.db.update_civilization(user_id, {"victory_achieved": True})
+
+        victory_type = next(iter(result.keys()))
+        victory_names = {
+            "domination": "⚔️ Domination",
+            "economic": "💰 Economic",
+            "diplomatic": "🤝 Diplomatic",
+            "industrial": "🏭 Industrial",
+            "conquest": "🌍 Conquest",
+            "united_nations": "🕊️ United Nations"
+        }
+
+        embed = discord.Embed(
+            title="🏆 VICTORY!",
+            description=f"**{civ['name']}** has achieved **{victory_names.get(victory_type, victory_type)}** Victory!",
+            color=discord.Color.gold()
+        )
+
+        details = {
+            "domination": f"Controlled {civ['territory']['land_size']:,} km² of territory",
+            "economic": f"Wealth of {civ['resources']['gold']:,} gold",
+            "diplomatic": "Formed a powerful alliance network",
+            "industrial": "Completed multiple megaprojects and policies",
+            "conquest": "Owned all provinces in the world",
+            "united_nations": "Formed a global alliance"
+        }
+        embed.add_field(name="Victory Details", value=details.get(victory_type, "Unknown"), inline=False)
+        embed.add_field(name="🎉 Congratulations!", value=f"<@{user_id}> has won the game!", inline=False)
+
+        for channel_id in config.VICTORY.get("announcement_channels", []):
+            channel = self.get_channel(channel_id)
+            if channel:
+                try:
+                    await channel.send(embed=embed)
+                except Exception as e:
+                    logger.error(f"Failed to announce victory to channel {channel_id}: {e}")
+
+        try:
+            user = await self.fetch_user(int(user_id))
+            await user.send(f"🏆 **YOU WON!** You achieved **{victory_names.get(victory_type, victory_type)}** Victory!")
+        except Exception:
+            pass
+
+
+def start_flask_server():
+    """Start the Flask web dashboard in a separate thread"""
+    try:
+        port = int(os.getenv("PORT", "5000"))
+        logger.info(f"Starting Flask dashboard on port {port}")
+        flask_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+    except Exception as e:
+        logger.error(f"Failed to start Flask server: {e}", exc_info=True)
+
+
+async def run_discord_bot():
+    """Start and supervise Discord bot connection."""
+    token = os.getenv('DISCORD_BOT_TOKEN')
+    if not token:
+        logger.warning("DISCORD_BOT_TOKEN is not set. Dashboard will run without the Discord bot.")
+        return
+
+    reconnect_delay = 10
+    while True:
+        bot = WarBot()
+        try:
+            await bot.start(token)
+            logger.warning("Discord bot stopped unexpectedly; restarting shortly.")
+        except discord.LoginFailure:
+            logger.error("Invalid DISCORD_BOT_TOKEN. Fix the token and redeploy.")
+            return
+        except discord.PrivilegedIntentsRequired:
+            logger.error("Privileged intents are disabled in the Discord Developer Portal for this bot.")
+            return
+        except Exception as e:
+            logger.error(f"Discord bot crashed: {e}", exc_info=True)
+        finally:
+            # --- Cancel events task ---
+            if bot.events_task and not bot.events_task.done():
+                bot.events_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await bot.events_task
+            # --- Cancel happiness effects task ---
+            if bot.happiness_task and not bot.happiness_task.done():
+                bot.happiness_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await bot.happiness_task
+            with contextlib.suppress(Exception):
+                await bot.close()
+        await asyncio.sleep(reconnect_delay)
+
+
+async def main():
+    """Main function to start the bot"""
+    load_dotenv()
+
+    flask_thread = threading.Thread(target=start_flask_server, daemon=False)
+    flask_thread.start()
+    logger.info("Startup complete: Flask thread launched")
+
+    await run_discord_bot()
+
+    if flask_thread.is_alive():
+        await asyncio.to_thread(flask_thread.join)
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot shutdown requested")
+    except Exception as e:
+        logger.error(f"Fatal error: {e}", exc_info=True)

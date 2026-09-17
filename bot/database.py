@@ -1352,18 +1352,21 @@ class Database:
             return False
 
     # -------------------- VICTORY CONDITIONS --------------------
+       # -------------------- VICTORY CONDITIONS --------------------
     def get_victory_progress(self, user_id: str) -> Dict[str, Any]:
         """Get progress toward each victory condition."""
         civ = self.get_civilization(user_id)
         if not civ:
             return {}
 
-        # Get all provinces
-        all_provinces = set(self.get_all_territories().keys())
-        total_provinces = len(all_provinces) if all_provinces else 1
-        owned = set(self.get_player_territories(user_id))
+        # --- Total provinces = the WHOLE MAP, claimed or not ---
+        try:
+            from bot.commands.territory import ALL_PROVINCES
+            total_provinces = len(ALL_PROVINCES) if ALL_PROVINCES else 1
+        except Exception:
+            total_provinces = len(self.get_all_territories().keys()) or 1
 
-        # --- Domination ---
+        owned = set(self.get_player_territories(user_id))
         domination_progress = len(owned) / total_provinces if total_provinces > 0 else 0
 
         # --- Economic ---
@@ -1372,14 +1375,15 @@ class Database:
         citizens = civ.get('population', {}).get('citizens', 1)
         gdp_per_citizen = gold / citizens if citizens > 0 else 0
 
-        # --- Diplomatic ---
-        alliances = self.client.collection("alliances").where("members", "array_contains", user_id).stream()
-        alliance_count = sum(1 for _ in alliances)
+        # --- Diplomatic (single pass, no double read) ---
+        alliance_count = 0
         alliance_score = 0
-        for doc in self.client.collection("alliances").where("members", "array_contains", user_id).stream():
+        for doc in self.client.collection("alliances") \
+                          .where("members", "array_contains", user_id) \
+                          .stream():
             data = doc.to_dict()
-            members = data.get("members", [])
-            alliance_score += len(members)
+            alliance_count += 1
+            alliance_score += len(data.get("members", []))
 
         # --- Industrial ---
         megaprojects = civ.get('megaprojects', [])
@@ -1420,9 +1424,8 @@ class Database:
                 "members": alliance_count,
                 "target": config.VICTORY["united_nations_members"],
                 "in_alliance": alliance_count > 0,
-            }
+            },
         }
-
     def check_victory(self, user_id: str) -> Optional[Dict[str, bool]]:
         """Check if a player has achieved any victory condition."""
         progress = self.get_victory_progress(user_id)

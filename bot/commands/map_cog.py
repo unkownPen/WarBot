@@ -36,14 +36,36 @@ except Exception:
     ALL_SUBREGIONS = []
 
 
-# Symbol glyph per division type (mirrors config.DIVISION_TYPES symbols)
-DIVISION_MARKER_SYMBOLS = {
+# Symbol glyph per division role branch
+ROLE_BRANCH_SYMBOLS = {
     "infantry":   "o",
     "armor":      "s",
-    "mechanized": "D",
     "artillery":  "P",
     "airborne":   "^",
+    "mechanized": "D",
 }
+
+# Fallback colors used everywhere — plain 4-tuples of floats
+FALLBACK_COLOR = (0.88, 0.88, 0.88, 1.0)
+ATTACKER_COLOR = (0.15, 0.35, 0.85, 1.0)
+DEFENDER_COLOR = (0.85, 0.15, 0.15, 1.0)
+MARKER_BLUE = "#1e40af"
+MARKER_RED = "#b91c1c"
+
+
+def _normalize_color(c) -> tuple:
+    """Force any color-like input into a 4-tuple of floats."""
+    try:
+        if c is None:
+            return FALLBACK_COLOR
+        # numpy array / list / tuple
+        if hasattr(c, "__len__") and len(c) >= 3:
+            r = float(c[0]); g = float(c[1]); b = float(c[2])
+            a = float(c[3]) if len(c) >= 4 else 1.0
+            return (r, g, b, a)
+    except Exception:
+        pass
+    return FALLBACK_COLOR
 
 
 class MapCog(commands.Cog):
@@ -67,7 +89,7 @@ class MapCog(commands.Cog):
                 self.gdf["geometry"] = self.gdf["geometry"].buffer(0)
                 # Normalize name column
                 self.gdf["_name"] = self.gdf.apply(self._row_name, axis=1)
-                # Precompute centroids (fast, needed for labels + markers)
+                # Precompute centroids (needed for labels + markers)
                 self.gdf["_centroid"] = self.gdf["geometry"].centroid
                 logger.info(f"Loaded regions.geojson with {len(self.gdf)} rows")
             except Exception as e:
@@ -75,7 +97,6 @@ class MapCog(commands.Cog):
                 self.gdf = None
 
         # ---- Image cache ----
-        # key -> {"buf": BytesIO, "ts": float}
         self.cache: Dict[str, Dict[str, Any]] = {}
 
     # =================================================================
@@ -95,13 +116,12 @@ class MapCog(commands.Cog):
         if self._is_fresh(entry, ttl):
             buf = entry["buf"]
             buf.seek(0)
-            return BytesIO(buf.getvalue())  # return a copy so consumers can't corrupt the cache
+            return BytesIO(buf.getvalue())
         return None
 
     def _store_cache(self, key: str, buf: BytesIO):
         buf.seek(0)
         self.cache[key] = {"buf": BytesIO(buf.getvalue()), "ts": time.time()}
-        # Trim to 15 entries
         if len(self.cache) > 15:
             oldest = min(self.cache.items(), key=lambda kv: kv[1]["ts"])[0]
             self.cache.pop(oldest, None)
@@ -130,11 +150,7 @@ class MapCog(commands.Cog):
         return ownership
 
     def _division_snapshot(self, owner_id: Optional[str] = None) -> Dict[str, List[Dict[str, Any]]]:
-        """Return {province_name: [division_docs...]}.
-
-        If owner_id is set, filter to only that owner's divisions.
-        Otherwise return all divisions on the map.
-        """
+        """Return {province_name: [division_docs...]}."""
         grouped: Dict[str, List[Dict[str, Any]]] = {}
         try:
             stream = self.db.client.collection("divisions").stream()
@@ -158,7 +174,7 @@ class MapCog(commands.Cog):
         filtered = self.gdf[self.gdf["_name"].isin(countries)]
         if filtered.empty:
             return None
-        return filtered.total_bounds  # [minx, miny, maxx, maxy]
+        return filtered.total_bounds
 
     def _player_bounds(self, ownership: Dict[str, Dict[str, Any]], user_ids: List[str]):
         if self.gdf is None:
@@ -214,10 +230,13 @@ class MapCog(commands.Cog):
         marker_alpha = config.MAP_RENDER["marker_alpha"]
 
         # ---- Build color map for owners ----
-        colors = plt.cm.tab20.colors
-        user_colors: Dict[str, Any] = {}
+        # Normalize every color to a plain 4-tuple of floats. Mixing numpy
+        # arrays and tuples in the same list crashes matplotlib's array
+        # conversion ("inhomogeneous shape").
+        raw_colors = plt.cm.tab20.colors
+        user_colors: Dict[str, tuple] = {}
         for i, (map_id, info) in enumerate(ownership.items()):
-            user_colors[map_id] = colors[i % len(colors)]
+            user_colors[map_id] = _normalize_color(raw_colors[i % len(raw_colors)])
 
         # ---- Build province -> owner lookup ----
         province_owner: Dict[str, str] = {}
@@ -237,25 +256,32 @@ class MapCog(commands.Cog):
                     return mid
             return None
 
-        # ---- Color array for every polygon ----
-        def row_color(row):
+        # ---- Color resolver for every polygon — always returns 4-tuple floats ----
+        def row_color(row) -> tuple:
             name = row.get("_name")
             owner = resolve_owner(name)
             if not owner:
-                return (0.88, 0.88, 0.88, 1)
-            # Warfront special-casing: attacker blue, defender red
+                return FALLBACK_COLOR
             if view_mode == "warfront" and attacker_id is not None and defender_id is not None:
                 if owner == str(attacker_id):
-                    return (0.15, 0.35, 0.85, 1)
+                    return ATTACKER_COLOR
                 if owner == str(defender_id):
-                    return (0.85, 0.15, 0.15, 1)
-            return user_colors.get(owner, (0.88, 0.88, 0.88, 1))
+                    return DEFENDER_COLOR
+            return user_colors.get(owner, FALLBACK_COLOR)
 
-        color_array = [row_color(row) for _, row in self.gdf.iterrows()]
+        # Build the color array, and sanity-normalize every entry.
+        color_array: List[tuple] = []
+        for _, row in self.gdf.iterrows():
+            color_array.append(_normalize_color(row_color(row)))
 
         # ---- Figure ----
         fig, ax = plt.subplots(figsize=(15, 10))
-        self.gdf.plot(ax=ax, color=color_array, edgecolor="white", linewidth=0.4)
+        try:
+            self.gdf.plot(ax=ax, color=color_array, edgecolor="white", linewidth=0.4)
+        except ValueError as ve:
+            # Last-resort fallback if the array still trips up — plot uniform grey
+            logger.error(f"Color array plot failed ({ve}); falling back to uniform fill.")
+            self.gdf.plot(ax=ax, color=FALLBACK_COLOR, edgecolor="white", linewidth=0.4)
 
         # ---- Apply zoom ----
         if bounds is not None:
@@ -264,7 +290,6 @@ class MapCog(commands.Cog):
             ax.set_ylim(padded[1], padded[3])
 
         # ---- Labels (country names) ----
-        # Sort provinces by area descending so larger areas win the label race
         label_candidates = []
         for _, row in self.gdf.iterrows():
             name = row.get("_name")
@@ -296,47 +321,54 @@ class MapCog(commands.Cog):
 
         # ---- Division markers ----
         if divisions:
-            # Which color should division markers use?
-            marker_color = "#1e40af"  # default blue
-            if view_mode == "warfront":
-                marker_color = "#1e40af"  # attacker color (assumed from perspective)
+            marker_color = MARKER_BLUE
+            if view_mode == "warfront" and defender_id is not None:
+                # If the caller is showing defender divisions
+                if division_color_owner and str(division_color_owner) == str(defender_id):
+                    marker_color = MARKER_RED
             elif division_color_owner and str(division_color_owner) != str(attacker_id or ""):
-                marker_color = "#b91c1c"
+                marker_color = MARKER_RED
 
             for province, div_list in divisions.items():
                 if not div_list:
                     continue
-                # Find centroid of that province
                 row = self.gdf[self.gdf["_name"] == province]
                 if row.empty:
-                    # Try fuzzy
                     row = self.gdf[self.gdf["_name"].str.lower() == province.lower()]
                 if row.empty:
                     continue
                 centroid = row.iloc[0]["_centroid"]
                 cx, cy = centroid.x, centroid.y
 
-                # Offset the marker slightly below the name label
-                offset_y = -0.6
-                marker_y = cy + offset_y
+                marker_y = cy - 0.6
 
-                # Group by type
                 type_counts: Dict[str, int] = {}
                 for d in div_list:
-                    dtype = d.get("type", "infantry")
-                    type_counts[dtype] = type_counts.get(dtype, 0) + 1
+                    role_key = d.get("type", "line_infantry")
+                    role = config.DIVISION_ROLES.get(role_key, {})
+                    branch = role.get("branch", "infantry")
+                    type_counts[branch] = type_counts.get(branch, 0) + 1
 
-                # Draw one marker per type
                 x_offset = 0
-                for dtype, count in type_counts.items():
-                    symbol = DIVISION_MARKER_SYMBOLS.get(dtype, "o")
-                    ax.scatter(
-                        cx + x_offset, marker_y,
-                        marker=symbol, s=marker_size,
-                        c=marker_color, alpha=marker_alpha,
-                        edgecolors="black", linewidths=0.8,
-                        zorder=6,
-                    )
+                for branch, count in type_counts.items():
+                    symbol = ROLE_BRANCH_SYMBOLS.get(branch, "o")
+                    try:
+                        ax.scatter(
+                            cx + x_offset, marker_y,
+                            marker=symbol, s=marker_size,
+                            c=marker_color, alpha=marker_alpha,
+                            edgecolors="black", linewidths=0.8,
+                            zorder=6,
+                        )
+                    except Exception:
+                        # If marker glyph unsupported, use a plain circle
+                        ax.scatter(
+                            cx + x_offset, marker_y,
+                            marker="o", s=marker_size,
+                            c=marker_color, alpha=marker_alpha,
+                            edgecolors="black", linewidths=0.8,
+                            zorder=6,
+                        )
                     if count > 1:
                         ax.text(
                             cx + x_offset, marker_y - 0.4,
@@ -347,10 +379,10 @@ class MapCog(commands.Cog):
                         )
                     x_offset += 0.9
 
-        # ---- Title / legend ----
+        # ---- Title ----
         titles = {
             "world": "World Map of Civilizations",
-            "region": f"Regional Map",
+            "region": "Regional Map",
             "warfront": "Warfront",
             "divisionmap": "Divisions of the World",
         }
@@ -383,7 +415,6 @@ class MapCog(commands.Cog):
         ownership = self._ownership_snapshot()
 
         if subregion is None:
-            # ---- World view ----
             key = "world:" + hashlib.md5(
                 json.dumps(ownership, sort_keys=True).encode()
             ).hexdigest()
@@ -496,13 +527,11 @@ class MapCog(commands.Cog):
             await ctx.send("❌ Neither of you own any provinces.")
             return
 
-        # Combined bounds of both players
         bounds = self._player_bounds(ownership, [my_id, their_id])
         if bounds is None:
             await ctx.send("❌ No owned provinces to show.")
             return
 
-        # Combined divisions from both sides
         my_div = self._division_snapshot(owner_id=my_id)
         their_div = self._division_snapshot(owner_id=their_id)
         merged_div: Dict[str, List[Dict[str, Any]]] = {}

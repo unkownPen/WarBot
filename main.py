@@ -28,10 +28,10 @@ from bot.commands.territory import TerritoryCog
 from bot.commands.map_cog import MapCog
 from bot.commands.countryballs import CountryballCog
 from bot.commands.unions import UnionCommands
+from bot.commands.corporations import CorporationsCog
 from bot.events import EventManager
 from bot import config
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -92,16 +92,12 @@ class WarBot(commands.Bot):
     # HAPPINESS EFFECTS LOOP
     # =================================================================
     async def _happiness_effects_loop(self):
-        """Every 5 minutes, apply negative/positive happiness consequences to every civ.
-
-        Without this, negative happiness does nothing over time. This is what
-        turns '.tax' into an actual risk.
-        """
+        """Every 5 minutes, apply negative/positive happiness consequences."""
         await self.wait_until_ready()
         logger.info("Happiness effects loop started")
         while not self.is_closed():
             try:
-                await asyncio.sleep(300)  # 5 minutes
+                await asyncio.sleep(300)
                 civs = self.db.get_all_civilizations()
                 for civ in civs:
                     uid = civ.get('user_id')
@@ -116,7 +112,6 @@ class WarBot(commands.Bot):
                 break
             except Exception as e:
                 logger.error(f"Happiness loop error: {e}", exc_info=True)
-                # Don't die — wait a bit and continue
                 await asyncio.sleep(60)
 
     # =================================================================
@@ -181,6 +176,8 @@ class WarBot(commands.Bot):
             logger.info("CountryballCog loaded successfully")
             await self.add_cog(UnionCommands(self))
             logger.info("UnionCommands loaded successfully")
+            await self.add_cog(CorporationsCog(self))
+            logger.info("CorporationsCog loaded successfully")
 
             logger.info("All command cogs loaded successfully")
             await self._auto_sync_commands()
@@ -203,7 +200,6 @@ class WarBot(commands.Bot):
             return
         await self.process_commands(message)
 
-        # ---- VICTORY CHECK AFTER ANY COMMAND ----
         if not message.author.bot:
             try:
                 await self.check_victory(str(message.author.id), message)
@@ -222,14 +218,13 @@ class WarBot(commands.Bot):
         return difflib.get_close_matches(attempted, sorted(all_names), n=limit, cutoff=0.45)
 
     # =================================================================
-    # ERROR HANDLERS (safe against dead interactions)
+    # ERROR HANDLERS
     # =================================================================
     async def on_command_error(self, ctx, error):
         if hasattr(ctx.command, "on_error"):
             return
 
         async def _safe_send(content=None, **kwargs):
-            """Send via ctx.send, swallowing errors from expired/responded interactions."""
             try:
                 await ctx.send(content, **kwargs)
             except (discord.NotFound, discord.HTTPException, discord.InteractionResponded):
@@ -308,7 +303,6 @@ class WarBot(commands.Bot):
     # VICTORY CHECKING
     # =================================================================
     async def check_victory(self, user_id: str, ctx_or_message=None):
-        """Check if a player has achieved any victory condition."""
         civ = self.civ_manager.get_civilization(user_id)
         if not civ:
             return
@@ -365,7 +359,6 @@ class WarBot(commands.Bot):
 
 
 def start_flask_server():
-    """Start the Flask web dashboard in a separate thread"""
     try:
         port = int(os.getenv("PORT", "5000"))
         logger.info(f"Starting Flask dashboard on port {port}")
@@ -375,7 +368,6 @@ def start_flask_server():
 
 
 async def run_discord_bot():
-    """Start and supervise Discord bot connection."""
     token = os.getenv('DISCORD_BOT_TOKEN')
     if not token:
         logger.warning("DISCORD_BOT_TOKEN is not set. Dashboard will run without the Discord bot.")
@@ -396,12 +388,10 @@ async def run_discord_bot():
         except Exception as e:
             logger.error(f"Discord bot crashed: {e}", exc_info=True)
         finally:
-            # --- Cancel events task ---
             if bot.events_task and not bot.events_task.done():
                 bot.events_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await bot.events_task
-            # --- Cancel happiness effects task ---
             if bot.happiness_task and not bot.happiness_task.done():
                 bot.happiness_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -412,7 +402,6 @@ async def run_discord_bot():
 
 
 async def main():
-    """Main function to start the bot"""
     load_dotenv()
 
     flask_thread = threading.Thread(target=start_flask_server, daemon=False)

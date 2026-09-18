@@ -128,7 +128,7 @@ COOLDOWNS = {
 
     "blackmarket": 0, "store": 0, "inventory": 0, "market": 0,
     "expand": 0, "rapidexpansion": 0, "territories": 0,
-    "map": 0, "divisionmap": 0, "warfront": 0,
+    "map": 0,
     "reclaim": 0, "civilwar": 0,
 
     "openpacks": 0, "evolve": 0, "packs": 0,
@@ -155,7 +155,7 @@ COOLDOWNS = {
     "nuke": 5, "obliterate": 13, "sacrifice": 1440,
     "clone": 30, "fakeflag": 30, "glitch_protocol": 30,
 
-    "corporation": 0, "megaproject": 0, "policy": 0, "policieshelp": 0,
+    "megaproject": 0, "policy": 0, "policieshelp": 0,
     "bank": 0, "bank_deposit": 0, "bank_withdraw": 0,
     "bank_loan": 0, "bank_repay": 0,
     "factions": 0, "unionstatus": 0,
@@ -163,13 +163,15 @@ COOLDOWNS = {
     "unite": 0, "acceptunite": 0, "declineunite": 0, "leave": 0,
     "annex": 0, "acceptannex": 0, "declineannex": 0,
 
-    # ---- Tactical / military ----
     "createdivision": 0, "divisions": 0, "deletedivision": 0,
     "renamedivision": 0, "movedivision": 0,
     "creategeneral": 0, "generals": 0, "deletegeneral": 0,
     "assigngeneral": 0, "unassigngeneral": 0,
     "doctrine": 0, "setdoctrine": 0,
     "tactics": 0,
+
+    # Corporations
+    "corp": 0, "corp_build": 0,
 }
 
 CAPS = {
@@ -332,9 +334,6 @@ VICTORY = {
     "announcement_channels": [],
 }
 
-# ================================================================
-# POWER CURVE (THE CLIMB)
-# ================================================================
 POWER_CURVE = {
     "tech_gather_per_level":  0.012,
     "tech_work_per_level":    0.012,
@@ -351,9 +350,6 @@ POWER_CURVE = {
     "hyperitem_pop_divisor":  40000,
 }
 
-# ================================================================
-# FACTIONS
-# ================================================================
 FACTIONS = {
     "military": {
         "name": "Military",
@@ -477,46 +473,32 @@ BANKING = {
 # ================================================================
 # PHASE 1 MILITARY — TACTICAL LAYER
 # ================================================================
-
-# ---- Operational Doctrines (permanent, 5M gold to switch) ----
 DOCTRINES = {
     "mobile_warfare": {
-        "name": "Mobile Warfare",
-        "emoji": "🏎️",
+        "name": "Mobile Warfare", "emoji": "🏎️",
         "desc": "Fast armored thrusts. Speed over firepower.",
-        "attack_mult": 1.15,
-        "defense_mult": 0.90,
-        "mobility_mult": 1.30,
-        "supply_mult": 1.20,
-        "casualty_mult": 1.10,
+        "attack_mult": 1.15, "defense_mult": 0.90,
+        "mobility_mult": 1.30, "supply_mult": 1.20, "casualty_mult": 1.10,
         "allowed_roles": ["breakthrough_armor", "exploitation_armor", "screening_armor",
                           "line_infantry", "ifv_infantry", "cavalry", "field_artillery"],
         "allowed_instructions": ["concentrate_armor", "avoid_urban", "commit_reserves_early",
                                  "sacrifice_supply_for_speed", "project_strength", "pursue_relentlessly"],
     },
     "superior_firepower": {
-        "name": "Superior Firepower",
-        "emoji": "💥",
+        "name": "Superior Firepower", "emoji": "💥",
         "desc": "Artillery-heavy. Win by shell, not bullet.",
-        "attack_mult": 1.25,
-        "defense_mult": 1.00,
-        "mobility_mult": 0.75,
-        "supply_mult": 1.40,
-        "casualty_mult": 0.80,
+        "attack_mult": 1.25, "defense_mult": 1.00,
+        "mobility_mult": 0.75, "supply_mult": 1.40, "casualty_mult": 0.80,
         "allowed_roles": ["line_infantry", "engineers", "siege_artillery", "field_artillery",
                           "rocket_artillery", "apc_infantry", "assault_guns"],
         "allowed_instructions": ["neutralize_air_first", "destroy_industry", "raid_logistics",
                                  "avoid_urban", "accept_high_casualties", "hold_reserves_late"],
     },
     "mass_assault": {
-        "name": "Mass Assault",
-        "emoji": "🌊",
+        "name": "Mass Assault", "emoji": "🌊",
         "desc": "Cheap infantry, huge numbers. Win by attrition.",
-        "attack_mult": 1.10,
-        "defense_mult": 0.95,
-        "mobility_mult": 0.85,
-        "supply_mult": 0.70,
-        "casualty_mult": 1.40,
+        "attack_mult": 1.10, "defense_mult": 0.95,
+        "mobility_mult": 0.85, "supply_mult": 0.70, "casualty_mult": 1.40,
         "allowed_roles": ["line_infantry", "assault_infantry", "garrison_infantry",
                           "field_artillery", "engineers", "apc_infantry"],
         "allowed_instructions": ["accept_high_casualties", "ignore_flanks",
@@ -524,14 +506,10 @@ DOCTRINES = {
                                  "commit_reserves_early"],
     },
     "grand_battleplan": {
-        "name": "Grand Battleplan",
-        "emoji": "📋",
+        "name": "Grand Battleplan", "emoji": "📋",
         "desc": "Balanced. Predictable. Reliable.",
-        "attack_mult": 1.05,
-        "defense_mult": 1.05,
-        "mobility_mult": 1.00,
-        "supply_mult": 1.00,
-        "casualty_mult": 0.95,
+        "attack_mult": 1.05, "defense_mult": 1.05,
+        "mobility_mult": 1.00, "supply_mult": 1.00, "casualty_mult": 0.95,
         "allowed_roles": ["line_infantry", "assault_infantry", "breakthrough_armor",
                           "field_artillery", "siege_artillery", "ifv_infantry",
                           "special_forces"],
@@ -539,14 +517,10 @@ DOCTRINES = {
                                  "hold_reserves_late", "concentrate_armor", "project_strength"],
     },
     "defense_in_depth": {
-        "name": "Defense in Depth",
-        "emoji": "🛡️",
+        "name": "Defense in Depth", "emoji": "🛡️",
         "desc": "Layered defense. Almost unbreakable on home soil.",
-        "attack_mult": 0.80,
-        "defense_mult": 1.35,
-        "mobility_mult": 0.85,
-        "supply_mult": 0.90,
-        "casualty_mult": 0.85,
+        "attack_mult": 0.80, "defense_mult": 1.35,
+        "mobility_mult": 0.85, "supply_mult": 0.90, "casualty_mult": 0.85,
         "allowed_roles": ["garrison_infantry", "engineers", "line_infantry",
                           "siege_artillery", "field_artillery", "screening_armor",
                           "assault_guns"],
@@ -555,14 +529,10 @@ DOCTRINES = {
                                  "minimize_own_losses", "raid_logistics"],
     },
     "asymmetric": {
-        "name": "Asymmetric Warfare",
-        "emoji": "🎭",
+        "name": "Asymmetric Warfare", "emoji": "🎭",
         "desc": "Guerrilla, sabotage, high variance.",
-        "attack_mult": 1.20,
-        "defense_mult": 0.85,
-        "mobility_mult": 1.15,
-        "supply_mult": 0.80,
-        "casualty_mult": 1.15,
+        "attack_mult": 1.20, "defense_mult": 0.85,
+        "mobility_mult": 1.15, "supply_mult": 0.80, "casualty_mult": 1.15,
         "allowed_roles": ["special_forces", "paratroopers", "air_assault",
                           "garrison_infantry", "screening_armor", "cavalry"],
         "allowed_instructions": ["feign_weakness", "raid_logistics", "destroy_industry",
@@ -572,152 +542,38 @@ DOCTRINES = {
 
 DOCTRINE_SWITCH_COST = 5_000_000
 
-# ---- Mentalities (per battle) ----
 MENTALITIES = {
-    "cautious": {
-        "name": "Cautious", "emoji": "🐢",
-        "attack_mult": 0.80, "defense_mult": 1.30,
-        "casualty_mult": 0.65, "happiness_delta": -2,
-        "desc": "Preserve the army. Low risk.",
-    },
-    "measured": {
-        "name": "Measured", "emoji": "⚖️",
-        "attack_mult": 0.95, "defense_mult": 1.15,
-        "casualty_mult": 0.85, "happiness_delta": 0,
-        "desc": "Controlled aggression.",
-    },
-    "balanced": {
-        "name": "Balanced", "emoji": "➖",
-        "attack_mult": 1.00, "defense_mult": 1.00,
-        "casualty_mult": 1.00, "happiness_delta": 0,
-        "desc": "Standard engagement.",
-    },
-    "aggressive": {
-        "name": "Aggressive", "emoji": "🔥",
-        "attack_mult": 1.20, "defense_mult": 0.90,
-        "casualty_mult": 1.20, "happiness_delta": -3,
-        "desc": "Push hard. Take losses.",
-    },
-    "total_war": {
-        "name": "Total War", "emoji": "💀",
-        "attack_mult": 1.35, "defense_mult": 0.80,
-        "casualty_mult": 1.50, "happiness_delta": -8,
-        "desc": "No restraint. Maximum damage both ways.",
-    },
+    "cautious":   {"name": "Cautious",  "emoji": "🐢", "attack_mult": 0.80, "defense_mult": 1.30, "casualty_mult": 0.65, "happiness_delta": -2, "desc": "Preserve the army. Low risk."},
+    "measured":   {"name": "Measured",  "emoji": "⚖️", "attack_mult": 0.95, "defense_mult": 1.15, "casualty_mult": 0.85, "happiness_delta": 0,  "desc": "Controlled aggression."},
+    "balanced":   {"name": "Balanced",  "emoji": "➖", "attack_mult": 1.00, "defense_mult": 1.00, "casualty_mult": 1.00, "happiness_delta": 0,  "desc": "Standard engagement."},
+    "aggressive": {"name": "Aggressive", "emoji": "🔥", "attack_mult": 1.20, "defense_mult": 0.90, "casualty_mult": 1.20, "happiness_delta": -3, "desc": "Push hard. Take losses."},
+    "total_war":  {"name": "Total War", "emoji": "💀", "attack_mult": 1.35, "defense_mult": 0.80, "casualty_mult": 1.50, "happiness_delta": -8, "desc": "No restraint. Maximum damage both ways."},
 }
 
-# ---- Division Roles (17 roles across 5 branches) ----
 DIVISION_ROLES = {
-    # Infantry
-    "line_infantry": {
-        "name": "Line Infantry", "branch": "infantry", "symbol": "o",
-        "attack_mult": 1.00, "defense_mult": 1.20, "speed": 1.0,
-        "cost_gold": 5, "cost_food": 3,
-        "desc": "Standard foot soldiers. Reliable.",
-    },
-    "assault_infantry": {
-        "name": "Assault Infantry", "branch": "infantry", "symbol": "o",
-        "attack_mult": 1.25, "defense_mult": 0.95, "speed": 1.0,
-        "cost_gold": 7, "cost_food": 4,
-        "desc": "Trained for urban and forest fighting.",
-    },
-    "garrison_infantry": {
-        "name": "Garrison Infantry", "branch": "infantry", "symbol": "o",
-        "attack_mult": 0.70, "defense_mult": 1.45, "speed": 0.8,
-        "cost_gold": 3, "cost_food": 2,
-        "desc": "Cheap defensive troops. Cannot attack well.",
-    },
-    "engineers": {
-        "name": "Combat Engineers", "branch": "infantry", "symbol": "e",
-        "attack_mult": 1.10, "defense_mult": 1.10, "speed": 0.9,
-        "cost_gold": 8, "cost_food": 4,
-        "desc": "Reduce enemy fortification bonus by 50%.",
-    },
-    # Armor
-    "breakthrough_armor": {
-        "name": "Breakthrough Armor", "branch": "armor", "symbol": "s",
-        "attack_mult": 1.55, "defense_mult": 0.90, "speed": 1.4,
-        "cost_gold": 18, "cost_food": 7,
-        "desc": "Crack the line. Heavy losses on both sides.",
-    },
-    "exploitation_armor": {
-        "name": "Exploitation Armor", "branch": "armor", "symbol": "s",
-        "attack_mult": 1.30, "defense_mult": 0.85, "speed": 1.8,
-        "cost_gold": 15, "cost_food": 6,
-        "desc": "Fast push after breakthrough. Weak alone.",
-    },
-    "screening_armor": {
-        "name": "Screening Armor", "branch": "armor", "symbol": "s",
-        "attack_mult": 0.80, "defense_mult": 1.10, "speed": 1.6,
-        "cost_gold": 10, "cost_food": 5,
-        "desc": "Recon and screening. +5% ally speed.",
-    },
-    "assault_guns": {
-        "name": "Assault Guns", "branch": "armor", "symbol": "s",
-        "attack_mult": 1.20, "defense_mult": 1.15, "speed": 0.7,
-        "cost_gold": 12, "cost_food": 6,
-        "desc": "Slow, tough, infantry-support.",
-    },
-    # Artillery
-    "field_artillery": {
-        "name": "Field Artillery", "branch": "artillery", "symbol": "P",
-        "attack_mult": 1.25, "defense_mult": 0.85, "speed": 0.8,
-        "cost_gold": 10, "cost_food": 5,
-        "desc": "General-purpose support.",
-    },
-    "siege_artillery": {
-        "name": "Siege Artillery", "branch": "artillery", "symbol": "P",
-        "attack_mult": 1.45, "defense_mult": 0.75, "speed": 0.6,
-        "cost_gold": 14, "cost_food": 7,
-        "desc": "Destroys fortifications. Very slow.",
-    },
-    "rocket_artillery": {
-        "name": "Rocket Artillery", "branch": "artillery", "symbol": "P",
-        "attack_mult": 1.60, "defense_mult": 0.70, "speed": 1.0,
-        "cost_gold": 16, "cost_food": 8,
-        "desc": "Massive burst damage. Low defense.",
-    },
-    # Airborne
-    "paratroopers": {
-        "name": "Paratroopers", "branch": "airborne", "symbol": "^",
-        "attack_mult": 1.30, "defense_mult": 0.90, "speed": 2.2,
-        "cost_gold": 18, "cost_food": 7,
-        "desc": "Seize key points behind lines.",
-    },
-    "air_assault": {
-        "name": "Air Assault", "branch": "airborne", "symbol": "^",
-        "attack_mult": 1.25, "defense_mult": 0.95, "speed": 2.0,
-        "cost_gold": 20, "cost_food": 8,
-        "desc": "Helicopter insertion. Fast and flexible.",
-    },
-    "special_forces": {
-        "name": "Special Forces", "branch": "airborne", "symbol": "^",
-        "attack_mult": 1.40, "defense_mult": 0.85, "speed": 1.8,
-        "cost_gold": 22, "cost_food": 9,
-        "desc": "Sabotage. High variance.",
-    },
-    # Mechanized
-    "apc_infantry": {
-        "name": "APC Infantry", "branch": "mechanized", "symbol": "D",
-        "attack_mult": 1.05, "defense_mult": 1.15, "speed": 1.4,
-        "cost_gold": 10, "cost_food": 5,
-        "desc": "Standard mobile infantry.",
-    },
-    "ifv_infantry": {
-        "name": "IFV Infantry", "branch": "mechanized", "symbol": "D",
-        "attack_mult": 1.20, "defense_mult": 1.05, "speed": 1.3,
-        "cost_gold": 13, "cost_food": 6,
-        "desc": "Heavier armament. Better combat power.",
-    },
-    "cavalry": {
-        "name": "Cavalry", "branch": "mechanized", "symbol": "c",
-        "attack_mult": 0.90, "defense_mult": 0.85, "speed": 2.0,
-        "cost_gold": 6, "cost_food": 3,
-        "desc": "Fast recon. +5% army speed.",
-    },
+    "line_infantry":      {"name": "Line Infantry",      "branch": "infantry",   "symbol": "o", "attack_mult": 1.00, "defense_mult": 1.20, "speed": 1.0, "cost_gold": 5,  "cost_food": 3, "desc": "Standard foot soldiers. Reliable."},
+    "assault_infantry":   {"name": "Assault Infantry",   "branch": "infantry",   "symbol": "o", "attack_mult": 1.25, "defense_mult": 0.95, "speed": 1.0, "cost_gold": 7,  "cost_food": 4, "desc": "Trained for urban and forest fighting."},
+    "garrison_infantry":  {"name": "Garrison Infantry",  "branch": "infantry",   "symbol": "o", "attack_mult": 0.70, "defense_mult": 1.45, "speed": 0.8, "cost_gold": 3,  "cost_food": 2, "desc": "Cheap defensive troops."},
+    "engineers":          {"name": "Combat Engineers",   "branch": "infantry",   "symbol": "e", "attack_mult": 1.10, "defense_mult": 1.10, "speed": 0.9, "cost_gold": 8,  "cost_food": 4, "desc": "Reduce enemy fortification bonus."},
+
+    "breakthrough_armor": {"name": "Breakthrough Armor", "branch": "armor",      "symbol": "s", "attack_mult": 1.55, "defense_mult": 0.90, "speed": 1.4, "cost_gold": 18, "cost_food": 7, "desc": "Crack the line. Heavy losses both sides."},
+    "exploitation_armor": {"name": "Exploitation Armor", "branch": "armor",      "symbol": "s", "attack_mult": 1.30, "defense_mult": 0.85, "speed": 1.8, "cost_gold": 15, "cost_food": 6, "desc": "Fast push after breakthrough."},
+    "screening_armor":    {"name": "Screening Armor",    "branch": "armor",      "symbol": "s", "attack_mult": 0.80, "defense_mult": 1.10, "speed": 1.6, "cost_gold": 10, "cost_food": 5, "desc": "Recon and screening."},
+    "assault_guns":       {"name": "Assault Guns",       "branch": "armor",      "symbol": "s", "attack_mult": 1.20, "defense_mult": 1.15, "speed": 0.7, "cost_gold": 12, "cost_food": 6, "desc": "Slow, tough, infantry-support."},
+
+    "field_artillery":    {"name": "Field Artillery",    "branch": "artillery",  "symbol": "P", "attack_mult": 1.25, "defense_mult": 0.85, "speed": 0.8, "cost_gold": 10, "cost_food": 5, "desc": "General-purpose support."},
+    "siege_artillery":    {"name": "Siege Artillery",    "branch": "artillery",  "symbol": "P", "attack_mult": 1.45, "defense_mult": 0.75, "speed": 0.6, "cost_gold": 14, "cost_food": 7, "desc": "Destroys fortifications."},
+    "rocket_artillery":   {"name": "Rocket Artillery",   "branch": "artillery",  "symbol": "P", "attack_mult": 1.60, "defense_mult": 0.70, "speed": 1.0, "cost_gold": 16, "cost_food": 8, "desc": "Massive burst damage."},
+
+    "paratroopers":       {"name": "Paratroopers",       "branch": "airborne",   "symbol": "^", "attack_mult": 1.30, "defense_mult": 0.90, "speed": 2.2, "cost_gold": 18, "cost_food": 7, "desc": "Seize key points behind lines."},
+    "air_assault":        {"name": "Air Assault",        "branch": "airborne",   "symbol": "^", "attack_mult": 1.25, "defense_mult": 0.95, "speed": 2.0, "cost_gold": 20, "cost_food": 8, "desc": "Helicopter insertion."},
+    "special_forces":     {"name": "Special Forces",     "branch": "airborne",   "symbol": "^", "attack_mult": 1.40, "defense_mult": 0.85, "speed": 1.8, "cost_gold": 22, "cost_food": 9, "desc": "Sabotage. High variance."},
+
+    "apc_infantry":       {"name": "APC Infantry",       "branch": "mechanized", "symbol": "D", "attack_mult": 1.05, "defense_mult": 1.15, "speed": 1.4, "cost_gold": 10, "cost_food": 5, "desc": "Standard mobile infantry."},
+    "ifv_infantry":       {"name": "IFV Infantry",       "branch": "mechanized", "symbol": "D", "attack_mult": 1.20, "defense_mult": 1.05, "speed": 1.3, "cost_gold": 13, "cost_food": 6, "desc": "Heavier armament."},
+    "cavalry":            {"name": "Cavalry",            "branch": "mechanized", "symbol": "c", "attack_mult": 0.90, "defense_mult": 0.85, "speed": 2.0, "cost_gold": 6,  "cost_food": 3, "desc": "Fast recon. +5% army speed."},
 }
 
-# ---- Combined Arms — role synergy pairs ----
 COMBINED_ARMS = {
     ("breakthrough_armor", "line_infantry"):      {"attack": 0.20, "defense": 0.10, "name": "Armored Fist"},
     ("breakthrough_armor", "assault_infantry"):   {"attack": 0.25, "name": "Urban Breakthrough"},
@@ -733,133 +589,58 @@ COMBINED_ARMS = {
     ("air_assault", "special_forces"):            {"attack": 0.25, "speed": 0.15, "name": "Rapid Strike"},
 }
 
-# ---- Operational Instructions ----
 OPERATIONAL_INSTRUCTIONS = {
-    "commit_reserves_early": {
-        "name": "Commit Reserves Early", "emoji": "⚡",
-        "effect": {"attack": 0.10, "casualty": 0.15},
-        "desc": "+10% attack, +15% casualties.",
-    },
-    "hold_reserves_late": {
-        "name": "Hold Reserves Late", "emoji": "⏳",
-        "effect": {"defense": 0.15, "casualty": -0.10},
-        "desc": "+15% defense, -10% casualties.",
-    },
-    "concentrate_armor": {
-        "name": "Concentrate Armor", "emoji": "🎯",
-        "effect": {"breakthrough": 0.25},
-        "desc": "+25% breakthrough chance.",
-    },
-    "avoid_urban": {
-        "name": "Avoid Urban Combat", "emoji": "🚧",
-        "effect": {"attack": -0.10, "casualty": -0.15},
-        "desc": "-10% attack, -15% casualties in cities.",
-    },
-    "accept_high_casualties": {
-        "name": "Accept High Casualties", "emoji": "💀",
-        "effect": {"attack": 0.20, "casualty": 0.30},
-        "desc": "+20% attack, +30% casualties.",
-    },
-    "minimize_own_losses": {
-        "name": "Minimize Own Losses", "emoji": "🛡️",
-        "effect": {"attack": -0.15, "casualty": -0.30},
-        "desc": "-15% attack, -30% casualties.",
-    },
-    "ignore_flanks": {
-        "name": "Ignore Flanks", "emoji": "➡️",
-        "effect": {"attack": 0.15, "risk_encirclement": 0.20},
-        "desc": "+15% attack, 20% risk of encirclement.",
-    },
-    "refuse_to_leave_flanks_open": {
-        "name": "Refuse Flanks", "emoji": "🔒",
-        "effect": {"defense": 0.15, "attack": -0.10},
-        "desc": "+15% defense, -10% attack.",
-    },
-    "hold_high_ground": {
-        "name": "Hold High Ground", "emoji": "⛰️",
-        "effect": {"defense": 0.25},
-        "desc": "+25% defense.",
-    },
-    "sacrifice_supply_for_speed": {
-        "name": "Sacrifice Supply for Speed", "emoji": "💨",
-        "effect": {"speed": 0.30, "supply": -0.40},
-        "desc": "+30% speed, -40% supply endurance.",
-    },
-    "raid_logistics": {
-        "name": "Raid Logistics", "emoji": "🚂",
-        "effect": {"enemy_supply_drain": 0.30},
-        "desc": "Drains enemy supply 30% faster.",
-    },
-    "destroy_industry": {
-        "name": "Destroy Industry", "emoji": "🏭",
-        "effect": {"extra_loot": -0.30, "enemy_long_term_damage": 0.40},
-        "desc": "Less loot now, more enemy damage long-term.",
-    },
-    "neutralize_air_first": {
-        "name": "Neutralize Air First", "emoji": "✈️",
-        "effect": {"enemy_air_penalty": 0.30, "own_ground_penalty": 0.10},
-        "desc": "-30% enemy air, -10% own ground for 1 battle.",
-    },
-    "scorched_earth_on_retreat": {
-        "name": "Scorched Earth", "emoji": "🔥",
-        "effect": {"enemy_loot_on_loss": -0.40},
-        "desc": "-40% enemy loot if you lose.",
-    },
-    "feign_weakness": {
-        "name": "Feign Weakness", "emoji": "🎭",
-        "effect": {"enemy_overconfidence": 0.15, "attack": 0.10},
-        "desc": "Enemy may overextend. +10% ambush chance.",
-    },
-    "project_strength": {
-        "name": "Project Strength", "emoji": "📣",
-        "effect": {"enemy_morale_penalty": 0.10, "own_casualty": 0.05},
-        "desc": "-10% enemy morale, +5% own casualties.",
-    },
-    "force_enemy_into_open": {
-        "name": "Force Enemy Into Open", "emoji": "🌾",
-        "effect": {"terrain_penalty_negate": 0.50},
-        "desc": "Ignores half of terrain penalties.",
-    },
-    "pursue_relentlessly": {
-        "name": "Pursue Relentlessly", "emoji": "🏃",
-        "effect": {"loot_on_win": 0.25, "casualty": 0.10},
-        "desc": "+25% loot on win, +10% casualties.",
-    },
+    "commit_reserves_early":       {"name": "Commit Reserves Early",       "emoji": "⚡", "effect": {"attack": 0.10, "casualty": 0.15}, "desc": "+10% attack, +15% casualties."},
+    "hold_reserves_late":          {"name": "Hold Reserves Late",          "emoji": "⏳", "effect": {"defense": 0.15, "casualty": -0.10}, "desc": "+15% defense, -10% casualties."},
+    "concentrate_armor":           {"name": "Concentrate Armor",           "emoji": "🎯", "effect": {"breakthrough": 0.25}, "desc": "+25% breakthrough chance."},
+    "avoid_urban":                 {"name": "Avoid Urban Combat",          "emoji": "🚧", "effect": {"attack": -0.10, "casualty": -0.15}, "desc": "-10% attack, -15% casualties in cities."},
+    "accept_high_casualties":      {"name": "Accept High Casualties",      "emoji": "💀", "effect": {"attack": 0.20, "casualty": 0.30}, "desc": "+20% attack, +30% casualties."},
+    "minimize_own_losses":         {"name": "Minimize Own Losses",         "emoji": "🛡️", "effect": {"attack": -0.15, "casualty": -0.30}, "desc": "-15% attack, -30% casualties."},
+    "ignore_flanks":               {"name": "Ignore Flanks",               "emoji": "➡️", "effect": {"attack": 0.15, "risk_encirclement": 0.20}, "desc": "+15% attack, 20% encirclement risk."},
+    "refuse_to_leave_flanks_open": {"name": "Refuse Flanks",               "emoji": "🔒", "effect": {"defense": 0.15, "attack": -0.10}, "desc": "+15% defense, -10% attack."},
+    "hold_high_ground":            {"name": "Hold High Ground",            "emoji": "⛰️", "effect": {"defense": 0.25}, "desc": "+25% defense."},
+    "sacrifice_supply_for_speed":  {"name": "Sacrifice Supply for Speed",  "emoji": "💨", "effect": {"speed": 0.30, "supply": -0.40}, "desc": "+30% speed, -40% supply endurance."},
+    "raid_logistics":              {"name": "Raid Logistics",              "emoji": "🚂", "effect": {"enemy_supply_drain": 0.30}, "desc": "Drains enemy supply 30% faster."},
+    "destroy_industry":            {"name": "Destroy Industry",            "emoji": "🏭", "effect": {"extra_loot": -0.30, "enemy_long_term_damage": 0.40}, "desc": "Less loot, more damage long-term."},
+    "neutralize_air_first":        {"name": "Neutralize Air First",        "emoji": "✈️", "effect": {"enemy_air_penalty": 0.30, "own_ground_penalty": 0.10}, "desc": "-30% enemy air, -10% own ground."},
+    "scorched_earth_on_retreat":   {"name": "Scorched Earth",              "emoji": "🔥", "effect": {"enemy_loot_on_loss": -0.40}, "desc": "-40% enemy loot if you lose."},
+    "feign_weakness":              {"name": "Feign Weakness",              "emoji": "🎭", "effect": {"enemy_overconfidence": 0.15, "attack": 0.10}, "desc": "+10% ambush chance."},
+    "project_strength":            {"name": "Project Strength",            "emoji": "📣", "effect": {"enemy_morale_penalty": 0.10, "own_casualty": 0.05}, "desc": "-10% enemy morale, +5% own casualties."},
+    "force_enemy_into_open":       {"name": "Force Enemy Into Open",       "emoji": "🌾", "effect": {"terrain_penalty_negate": 0.50}, "desc": "Ignores half of terrain penalties."},
+    "pursue_relentlessly":         {"name": "Pursue Relentlessly",         "emoji": "🏃", "effect": {"loot_on_win": 0.25, "casualty": 0.10}, "desc": "+25% loot on win, +10% casualties."},
 }
 
-# ---- Battle Plan Phases ----
 BATTLE_PHASES = {
     "opening": {
         "name": "Opening Phase", "emoji": "🎬",
         "options": {
-            "artillery_barrage": {"name": "Artillery Barrage", "effect": {"enemy_defense": -0.15}},
-            "air_strike": {"name": "Air Strike", "effect": {"enemy_defense": -0.10, "enemy_air": -0.20}},
-            "armored_spearhead": {"name": "Armored Spearhead", "effect": {"own_attack": 0.15}},
-            "infantry_probe": {"name": "Infantry Probe", "effect": {"intel": 0.30}},
-            "feint": {"name": "Feint", "effect": {"enemy_confusion": 0.20}},
+            "artillery_barrage":  {"name": "Artillery Barrage",  "effect": {"enemy_defense": -0.15}},
+            "air_strike":         {"name": "Air Strike",         "effect": {"enemy_defense": -0.10, "enemy_air": -0.20}},
+            "armored_spearhead":  {"name": "Armored Spearhead",  "effect": {"own_attack": 0.15}},
+            "infantry_probe":     {"name": "Infantry Probe",     "effect": {"intel": 0.30}},
+            "feint":              {"name": "Feint",              "effect": {"enemy_confusion": 0.20}},
         },
     },
     "main": {
         "name": "Main Phase", "emoji": "⚔️",
         "options": {
-            "frontal_assault": {"name": "Frontal Assault", "effect": {"attack": 0.20, "casualty": 0.15}},
+            "frontal_assault":   {"name": "Frontal Assault",   "effect": {"attack": 0.20, "casualty": 0.15}},
             "flanking_maneuver": {"name": "Flanking Maneuver", "effect": {"attack": 0.15, "enemy_flank": 0.20}},
-            "encirclement": {"name": "Encirclement", "effect": {"enemy_supply": -0.40}},
-            "attrition_grind": {"name": "Attrition Grind", "effect": {"casualty": -0.20, "attack": -0.10}},
+            "encirclement":      {"name": "Encirclement",      "effect": {"enemy_supply": -0.40}},
+            "attrition_grind":   {"name": "Attrition Grind",   "effect": {"casualty": -0.20, "attack": -0.10}},
         },
     },
     "exploitation": {
         "name": "Exploitation Phase", "emoji": "🏆",
         "options": {
-            "pursue": {"name": "Pursue", "effect": {"extra_loot": 0.25, "casualty": 0.15}},
+            "pursue":      {"name": "Pursue",      "effect": {"extra_loot": 0.25, "casualty": 0.15}},
             "consolidate": {"name": "Consolidate", "effect": {"defense_bonus": 0.20}},
-            "fortify": {"name": "Fortify", "effect": {"territory_hold": 0.30}},
-            "withdraw": {"name": "Withdraw", "effect": {"casualty": -0.30, "no_loot": 1.0}},
+            "fortify":     {"name": "Fortify",     "effect": {"territory_hold": 0.30}},
+            "withdraw":    {"name": "Withdraw",    "effect": {"casualty": -0.30, "no_loot": 1.0}},
         },
     },
 }
 
-# ---- Directional Borders ----
 ATTACK_DIRECTIONS = {
     "N":  {"name": "North",     "emoji": "⬆️"},
     "NE": {"name": "Northeast", "emoji": "↗️"},
@@ -871,84 +652,33 @@ ATTACK_DIRECTIONS = {
     "NW": {"name": "Northwest", "emoji": "↖️"},
 }
 
-# ---- Techniques (compatible with the 6 original + doctrine gating) ----
 TECHNIQUES = {
-    "blitzkrieg": {
-        "name": "Blitzkrieg", "emoji": "⚡",
-        "attack_mult": 1.40, "defense_mult": 0.90,
-        "cost": {"gold": 5000, "food": 1000},
-        "terrain_bonus": ["plains"], "terrain_penalty": ["mountain", "urban", "forest"],
-        "counter": "attrition", "countered_by": "defense_in_depth",
-        "desc": "Fast armored assault. Weak in cities and mountains.",
-        "doctrines": ["mobile_warfare", "grand_battleplan"],
-    },
-    "attrition": {
-        "name": "Attrition", "emoji": "🪓",
-        "attack_mult": 1.00, "defense_mult": 0.85,
-        "cost": {"gold": 2000, "food": 3000},
-        "terrain_bonus": ["forest", "mountain"], "terrain_penalty": ["plains"],
-        "counter": "defense_in_depth", "countered_by": "blitzkrieg",
-        "desc": "Grind the enemy down. Slow but reliable.",
-        "doctrines": ["mass_assault", "superior_firepower", "defense_in_depth"],
-    },
-    "encirclement": {
-        "name": "Encirclement", "emoji": "🔗",
-        "attack_mult": 1.35, "defense_mult": 0.80,
-        "cost": {"gold": 8000, "food": 2000},
-        "terrain_bonus": ["plains", "urban"], "terrain_penalty": ["mountain"],
-        "counter": "blitzkrieg", "countered_by": "attrition",
-        "desc": "Cut supply lines. Devastating against mobile forces.",
-        "doctrines": ["mobile_warfare", "grand_battleplan"],
-    },
-    "defense_in_depth": {
-        "name": "Defense in Depth", "emoji": "🛡️",
-        "attack_mult": 0.85, "defense_mult": 1.30,
-        "cost": {"gold": 3000, "food": 1500},
-        "terrain_bonus": ["mountain", "urban", "forest"], "terrain_penalty": ["plains"],
-        "counter": "blitzkrieg", "countered_by": "encirclement",
-        "desc": "Layered defense. Very hard to break.",
-        "doctrines": ["defense_in_depth", "superior_firepower"],
-    },
-    "human_wave": {
-        "name": "Human Wave", "emoji": "🌊",
-        "attack_mult": 1.20, "defense_mult": 0.75,
-        "cost": {"gold": 1000, "food": 4000},
-        "terrain_bonus": [], "terrain_penalty": [],
-        "counter": "attrition", "countered_by": "blitzkrieg",
-        "desc": "Sheer numbers. Cheap, costly in lives.",
-        "doctrines": ["mass_assault"],
-    },
-    "feint": {
-        "name": "Feint", "emoji": "🎭",
-        "attack_mult": 0.90, "defense_mult": 1.00,
-        "cost": {"gold": 4000, "food": 1000},
-        "terrain_bonus": ["urban"], "terrain_penalty": [],
-        "counter": "encirclement", "countered_by": "human_wave",
-        "desc": "Draw enemy forces away. Frees other fronts.",
-        "doctrines": ["asymmetric", "grand_battleplan"],
-    },
+    "blitzkrieg":       {"name": "Blitzkrieg",       "emoji": "⚡", "attack_mult": 1.40, "defense_mult": 0.90, "cost": {"gold": 5000, "food": 1000}, "terrain_bonus": ["plains"], "terrain_penalty": ["mountain", "urban", "forest"], "counter": "attrition",       "countered_by": "defense_in_depth", "desc": "Fast armored assault. Weak in cities and mountains.", "doctrines": ["mobile_warfare", "grand_battleplan"]},
+    "attrition":        {"name": "Attrition",        "emoji": "🪓", "attack_mult": 1.00, "defense_mult": 0.85, "cost": {"gold": 2000, "food": 3000}, "terrain_bonus": ["forest", "mountain"], "terrain_penalty": ["plains"], "counter": "defense_in_depth", "countered_by": "blitzkrieg",       "desc": "Grind the enemy down. Slow but reliable.", "doctrines": ["mass_assault", "superior_firepower", "defense_in_depth"]},
+    "encirclement":     {"name": "Encirclement",     "emoji": "🔗", "attack_mult": 1.35, "defense_mult": 0.80, "cost": {"gold": 8000, "food": 2000}, "terrain_bonus": ["plains", "urban"], "terrain_penalty": ["mountain"], "counter": "blitzkrieg",      "countered_by": "attrition",        "desc": "Cut supply lines. Devastating against mobile forces.", "doctrines": ["mobile_warfare", "grand_battleplan"]},
+    "defense_in_depth": {"name": "Defense in Depth", "emoji": "🛡️", "attack_mult": 0.85, "defense_mult": 1.30, "cost": {"gold": 3000, "food": 1500}, "terrain_bonus": ["mountain", "urban", "forest"], "terrain_penalty": ["plains"], "counter": "blitzkrieg",      "countered_by": "encirclement",     "desc": "Layered defense. Very hard to break.", "doctrines": ["defense_in_depth", "superior_firepower"]},
+    "human_wave":       {"name": "Human Wave",       "emoji": "🌊", "attack_mult": 1.20, "defense_mult": 0.75, "cost": {"gold": 1000, "food": 4000}, "terrain_bonus": [], "terrain_penalty": [], "counter": "attrition",             "countered_by": "blitzkrieg",       "desc": "Sheer numbers. Cheap, costly in lives.", "doctrines": ["mass_assault"]},
+    "feint":            {"name": "Feint",            "emoji": "🎭", "attack_mult": 0.90, "defense_mult": 1.00, "cost": {"gold": 4000, "food": 1000}, "terrain_bonus": ["urban"], "terrain_penalty": [], "counter": "encirclement",          "countered_by": "human_wave",       "desc": "Draw enemy forces away. Frees other fronts.", "doctrines": ["asymmetric", "grand_battleplan"]},
 }
 
-# ---- General Traits ----
 GENERAL_POSITIVE_TRAITS = {
-    "aggressive":    {"name": "Aggressive",  "effect": "attack_mult_bonus",  "value": 1.10, "description": "+10% attack strength."},
-    "defensive":     {"name": "Defensive",   "effect": "defense_mult_bonus", "value": 1.10, "description": "+10% defense strength."},
-    "logistician":   {"name": "Logistician", "effect": "supply_drain_reduction", "value": 0.30, "description": "Supply drains 30% slower."},
-    "inspiring":     {"name": "Inspiring",   "effect": "morale_recovery_bonus", "value": 1.15, "description": "+15% morale recovery."},
-    "tactician":     {"name": "Tactician",   "effect": "technique_effectiveness_bonus", "value": 1.05, "description": "+5% technique effectiveness."},
-    "veteran":       {"name": "Veteran",     "effect": "experience_gain_bonus", "value": 1.20, "description": "+20% experience gain."},
+    "aggressive":  {"name": "Aggressive",  "effect": "attack_mult_bonus",           "value": 1.10, "description": "+10% attack strength."},
+    "defensive":   {"name": "Defensive",   "effect": "defense_mult_bonus",          "value": 1.10, "description": "+10% defense strength."},
+    "logistician": {"name": "Logistician", "effect": "supply_drain_reduction",      "value": 0.30, "description": "Supply drains 30% slower."},
+    "inspiring":   {"name": "Inspiring",   "effect": "morale_recovery_bonus",       "value": 1.15, "description": "+15% morale recovery."},
+    "tactician":   {"name": "Tactician",   "effect": "technique_effectiveness_bonus","value": 1.05, "description": "+5% technique effectiveness."},
+    "veteran":     {"name": "Veteran",     "effect": "experience_gain_bonus",       "value": 1.20, "description": "+20% experience gain."},
 }
 
 GENERAL_NEGATIVE_TRAITS = {
-    "reckless":      {"name": "Reckless",    "effect": "casualty_mult", "value": 1.20, "description": "+20% casualties suffered."},
-    "cautious":      {"name": "Cautious",    "effect": "attack_mult_penalty", "value": 0.85, "description": "-15% attack strength."},
-    "glory_hound":   {"name": "Glory Hound", "effect": "ignore_orders_chance", "value": 0.10, "description": "10% chance to ignore orders."},
-    "paranoid":      {"name": "Paranoid",    "effect": "morale_penalty", "value": 0.90, "description": "-10% morale."},
-    "stubborn":      {"name": "Stubborn",    "effect": "retreat_refusal_loss_mult", "value": 1.30, "description": "Won't retreat. +30% losses if losing."},
-    "alcoholic":     {"name": "Alcoholic",   "effect": "supply_efficiency_penalty", "value": 0.80, "description": "Supply runs 20% less efficiently."},
+    "reckless":    {"name": "Reckless",    "effect": "casualty_mult",              "value": 1.20, "description": "+20% casualties suffered."},
+    "cautious":    {"name": "Cautious",    "effect": "attack_mult_penalty",        "value": 0.85, "description": "-15% attack strength."},
+    "glory_hound": {"name": "Glory Hound", "effect": "ignore_orders_chance",       "value": 0.10, "description": "10% chance to ignore orders."},
+    "paranoid":    {"name": "Paranoid",    "effect": "morale_penalty",             "value": 0.90, "description": "-10% morale."},
+    "stubborn":    {"name": "Stubborn",    "effect": "retreat_refusal_loss_mult",  "value": 1.30, "description": "Won't retreat. +30% losses if losing."},
+    "alcoholic":   {"name": "Alcoholic",   "effect": "supply_efficiency_penalty",  "value": 0.80, "description": "Supply runs 20% less efficiently."},
 }
 
-# ---- Division / General limits ----
 DIVISION_LIMITS = {
     "max_per_user": 10,
     "min_size": 500,
@@ -971,19 +701,93 @@ MAP_RENDER = {
     "padding": 0.08,
     "label_min_area": 30000,
     "label_max_count": 40,
-    "font_size": {
-        "world": 6,
-        "region": 8,
-        "warfront": 9,
-        "province": 10,
-    },
+    "font_size": {"world": 6, "region": 8, "warfront": 9, "province": 10},
     "marker_size": 120,
     "marker_alpha": 0.9,
-    "cache_ttl": {
-        "world": 300,
-        "region": 120,
-        "warfront": 60,
-        "divisionmap": 60,
-        "province": 120,
+    "cache_ttl": {"world": 300, "region": 120, "warfront": 60, "divisionmap": 60, "province": 120},
+}
+
+# ================================================================
+# CORPORATIONS
+# ================================================================
+INDUSTRIES = {
+    "agriculture": {
+        "name": "Agriculture", "emoji": "🌾",
+        "startup_cost": 50_000, "tech_required": 1,
+        "consumes": {},
+        "produces": {"food": 300},
+        "base_wage": 2,
+        "desc": "Feeds the nation. Cheap entry, reliable income.",
     },
+    "mining": {
+        "name": "Mining", "emoji": "⛏️",
+        "startup_cost": 150_000, "tech_required": 2,
+        "consumes": {},
+        "produces": {"stone": 400, "wood": 200},
+        "base_wage": 3,
+        "desc": "Extract resources. Best in Africa/Central Asia.",
+    },
+    "manufacturing": {
+        "name": "Manufacturing", "emoji": "🏭",
+        "startup_cost": 400_000, "tech_required": 4,
+        "consumes": {"stone": 200, "wood": 100},
+        "produces": {"gold": 3500},
+        "base_wage": 4,
+        "desc": "Turn raw materials into gold.",
+    },
+    "banking": {
+        "name": "Banking", "emoji": "🏦",
+        "startup_cost": 800_000, "tech_required": 5,
+        "consumes": {},
+        "produces": {"gold": 5500},
+        "base_wage": 5,
+        "desc": "Financial services. Stable, low risk.",
+    },
+    "trade": {
+        "name": "Trade Company", "emoji": "🚢",
+        "startup_cost": 600_000, "tech_required": 3,
+        "consumes": {},
+        "produces": {"gold": 4500},
+        "base_wage": 4,
+        "desc": "Trade routes. Needs 3+ provinces.",
+        "requires_provinces": 3,
+    },
+    "arms": {
+        "name": "Arms Manufacturing", "emoji": "⚔️",
+        "startup_cost": 1_000_000, "tech_required": 6,
+        "consumes": {"stone": 300, "wood": 200},
+        "produces": {"gold": 4000, "soldiers": 25},
+        "base_wage": 6,
+        "desc": "Weapons factory. Produces gold AND trains soldiers.",
+    },
+}
+
+BUSINESS_EVENTS = [
+    {"name": "Trade boom",           "desc": "+30% revenue",           "effect": {"revenue_mult": 1.3},  "prob": 0.15, "type": "positive"},
+    {"name": "Viral marketing",      "desc": "+5 marketing",            "effect": {"marketing": 5},        "prob": 0.10, "type": "positive"},
+    {"name": "Worker innovation",    "desc": "+3 R&D",                  "effect": {"r_and_d": 3},          "prob": 0.10, "type": "positive"},
+    {"name": "Government contract",  "desc": "+5,000 gold",             "effect": {"gold_bonus": 5000},    "prob": 0.05, "type": "positive"},
+    {"name": "Worker strike",        "desc": "No production, -20 morale","effect": {"skip_production": True, "morale": -20}, "prob": 0.05, "type": "negative"},
+    {"name": "Equipment breakdown",  "desc": "-15 efficiency",          "effect": {"efficiency": -15},     "prob": 0.05, "type": "negative"},
+    {"name": "Industrial espionage", "desc": "-10 R&D, -2,000 gold",    "effect": {"r_and_d": -10, "gold_bonus": -2000}, "prob": 0.03, "type": "negative"},
+    {"name": "Market crash",         "desc": "-40% revenue",            "effect": {"revenue_mult": 0.6},   "prob": 0.03, "type": "negative"},
+]
+
+CORP_LIMITS = {
+    "max_per_user": 5,
+    "min_name_length": 2,
+    "max_name_length": 32,
+    "starting_efficiency": 100,
+    "starting_morale": 100,
+    "starting_reputation": 50,
+    "max_level": 10,
+    "max_employees": 500,
+    "max_assets": 100,
+    "max_marketing": 100,
+    "max_r_and_d": 100,
+    "upgrade_base_cost": 50_000,
+    "asset_cost_per_point": 2_000,
+    "marketing_cost_per_point": 1_500,
+    "rd_cost_per_point": 5_000,
+    "dividend_min": 1_000,
 }

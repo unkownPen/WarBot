@@ -286,7 +286,7 @@ class CivilizationManager:
           2) Happiness < 50 (legacy path) → generic rebellion
 
         30-minute per-user cooldown. If the player has only 1 territory,
-        returns a single_territory warning and does not split.
+        returns None (cannot split a single territory).
         """
         try:
             from bot import config
@@ -306,10 +306,10 @@ class CivilizationManager:
                         return None
                 except (ValueError, TypeError):
                     pass
-                    
+
             owned = self.db.get_player_territories(user_id)
             if len(owned) < 2:
-                return None  # was: {"single_territory": True, "warning": True}
+                return None  # Single territory — cannot split, silent
 
             factions = civ.get('factions', {"military": 50, "merchant": 50, "people": 50})
 
@@ -828,13 +828,13 @@ class CivilizationManager:
                     if rb.get(k):
                         region_modifier *= rb[k]
 
-            # ---- Territory modifier (now capped at 1.5x, not 3.0x) ----
+            # ---- Territory modifier (capped at 1.5x, not 3.0x) ----
             territory_modifier = get_territory_modifier(territory['land_size'])
 
             base_gold = int(population['citizens'] * 0.1 * territory_modifier * employment_modifier)
             base_food = int(population['citizens'] * 0.2 * employment_modifier)
 
-            # ---- Tech multiplier (now 1.05x/level, was 1.15x) ----
+            # ---- Tech multiplier ----
             tech_level = military['tech_level']
             tech_per_level = config.POWER_CURVE.get("tech_gold_per_level", 0.05)
             base_gold = int(base_gold * (1 + tech_level * tech_per_level))
@@ -869,6 +869,16 @@ class CivilizationManager:
             inc_bane = self.get_faction_bane_modifier(user_id, "resource_income_mult")
             base_gold = int(base_gold * gold_bless * gold_bane)
             resource_modifier *= inc_bless * inc_bane
+
+            # ---- Sanction pressure ----
+            try:
+                now = datetime.utcnow()
+                for s in (civ.get('received_sanctions') or []):
+                    if datetime.fromisoformat(s['expires_at']) > now:
+                        resource_modifier *= config.SANCTIONS.get('resource_income_multiplier', 0.75)
+                        break
+            except Exception:
+                pass
 
             # ---- Happiness effect (misery scales down production) ----
             happiness = population.get('happiness', 50)
@@ -907,7 +917,7 @@ class CivilizationManager:
             return {}
 
     # =================================================================
-    # HAPPINESS EFFECTS
+    # HAPPINESS EFFECTS — includes faction drift + sanction pressure
     # =================================================================
     def apply_happiness_effects(self, user_id: str):
         try:
@@ -931,6 +941,33 @@ class CivilizationManager:
                 else:
                     happiness_modifier += ih
             happiness = int(happiness * happiness_modifier)
+
+            # ---- Sanction pressure: -X happiness per tick while sanctioned ----
+            try:
+                from bot import config as _cfg
+                now = datetime.utcnow()
+                for s in (civ.get('received_sanctions') or []):
+                    if datetime.fromisoformat(s['expires_at']) > now:
+                        happiness -= _cfg.SANCTIONS.get('happiness_penalty_per_tick', 0)
+                        break
+            except Exception:
+                pass
+
+            # ---- Faction drift: unused factions decay toward 50 ----
+            try:
+                factions = civ.get('factions', {"military": 50, "merchant": 50, "people": 50})
+                changed = False
+                for fkey in ("military", "merchant", "people"):
+                    val = factions.get(fkey, 50)
+                    if val > 50:
+                        # decay 1 per tick toward 50
+                        factions[fkey] = max(50, val - 1)
+                        changed = True
+                if changed:
+                    self.db.update_civilization(user_id, {"factions": factions})
+                    self._invalidate_civ(user_id)
+            except Exception:
+                pass
 
             if happiness < 0:
                 severity = abs(happiness)

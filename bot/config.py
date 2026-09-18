@@ -108,173 +108,66 @@ MILITARY = {
 # COOLDOWNS (in minutes)
 # ================================================================
 COOLDOWNS = {
-    # ---- Economy: 1-2 min for spammables, 0 for one-shots ----
-    "gather": 1,
-    "work": 1,
-    "farm": 1,
-    "mine": 1,
-    "harvest": 2,
-    "drill": 2,
-    "fish": 1,
-    "labor": 3,
-    "raidcaravan": 3,
-    "tax": 5,
-    "lottery": 1,
-    "invest": 5,
-    "advertise": 5,
-    "immigration": 5,
-    "sell": 0,
-    "festival": 2,
-    "cheer": 1,
-    "cheerup": 5,
-    "buytech": 0,
-    "buysoldiers": 0,
-    "buyspys": 0,
-    "burn": 0,
-    "buycard": 0,
+    "gather": 1, "work": 1, "farm": 1, "mine": 1, "harvest": 2,
+    "drill": 2, "fish": 1, "labor": 3, "raidcaravan": 3,
+    "tax": 5, "lottery": 1, "invest": 5, "advertise": 5,
+    "immigration": 5, "sell": 0, "festival": 2, "cheer": 1, "cheerup": 5,
+    "buytech": 0, "buysoldiers": 0, "buyspys": 0, "burn": 0, "buycard": 0,
 
-    # ---- Military: 1-5 min for combat, 0 for setup ----
-    "train": 2,
-    "find": 1,
-    "attack": 3,
-    "siege": 10,
-    "stealthbattle": 4,
-    "navalattack": 3,
-    "airattack": 3,
-    "navalblockade": 20,
-    "buildship": 0,
-    "buildplane": 0,
-    "tech": 0,
-    "trainboost": 0,
-    "addborder": 0,
-    "removeborder": 0,
-    "rectract": 0,
-    "retrieve": 0,
-    "borderinfo": 0,
+    "train": 2, "find": 1, "attack": 3, "siege": 10,
+    "stealthbattle": 4, "navalattack": 3, "airattack": 3,
+    "navalblockade": 20, "buildship": 0, "buildplane": 0,
+    "tech": 0, "trainboost": 0,
+    "addborder": 0, "removeborder": 0, "rectract": 0,
+    "retrieve": 0, "borderinfo": 0,
 
-    # ---- Diplomacy ----
-    "ally": 0,
-    "acceptally": 0,
-    "rejectally": 0,
-    "break": 0,
-    "send": 0,
-    "trade": 0,
-    "accepttrade": 0,
-    "rejecttrade": 0,
-    "mail": 0,
-    "inbox": 0,
-    "coalition": 0,
-    "sanction": 0,
-    "liftsanction": 0,
-    "sanctions": 0,
+    "ally": 0, "acceptally": 0, "rejectally": 0, "break": 0,
+    "send": 0, "trade": 0, "accepttrade": 0, "rejecttrade": 0,
+    "mail": 0, "inbox": 0, "coalition": 0,
+    "sanction": 0, "liftsanction": 0, "sanctions": 0,
 
-    # ---- Store / inventory ----
-    "blackmarket": 0,
-    "store": 0,
-    "inventory": 0,
-    "market": 0,
+    "blackmarket": 0, "store": 0, "inventory": 0, "market": 0,
+    "expand": 0, "rapidexpansion": 0, "territories": 0,
+    "map": 0, "divisionmap": 0, "warfront": 0,
+    "reclaim": 0, "civilwar": 0,
 
-    # ---- Territory ----
-    "expand": 0,
-    "rapidexpansion": 0,
-    "territories": 0,
-    "map": 0,
-    "reclaim": 0,
-    "civilwar": 0,
+    "openpacks": 0, "evolve": 0, "packs": 0,
+    "activate": 0, "deactivate": 0, "synergies": 0,
 
-    # ---- Countryballs ----
-    "openpacks": 0,
-    "evolve": 0,
-    "packs": 0,
-    "activate": 0,
-    "deactivate": 0,
-    "synergies": 0,
+    "industrial_start": 0, "industrial_status": 0,
+    "industrial_build": 2, "industrial_tech": 2, "industrial_workers": 2,
+    "industrial_cleanup": 2, "industrial_railway": 2, "industrial_transport": 2,
+    "industrial_army": 2, "industrial_policy": 2, "industrial_import": 2,
+    "industrial_export": 2, "industrial_steam": 2, "industrial_mine": 2,
+    "industrial_hospital": 2, "industrial_school": 2, "industrial_law": 2,
+    "industrial_trade": 2, "industrial_aid": 2, "industrial_suppress": 2,
+    "industrial_bribe": 2, "industrial_automate": 2, "industrial_upgrade": 2,
+    "industrial_relief": 2, "industrial_expand": 2,
+    "industrial_banking": 10, "industrial_nationalize": 5, "indushelp": 0,
 
-    # ---- Industrial ----
-    "industrial_start": 0,
-    "industrial_status": 0,
-    "industrial_build": 2,
-    "industrial_tech": 2,
-    "industrial_workers": 2,
-    "industrial_cleanup": 2,
-    "industrial_railway": 2,
-    "industrial_transport": 2,
-    "industrial_army": 2,
-    "industrial_policy": 2,
-    "industrial_import": 2,
-    "industrial_export": 2,
-    "industrial_steam": 2,
-    "industrial_mine": 2,
-    "industrial_hospital": 2,
-    "industrial_school": 2,
-    "industrial_law": 2,
-    "industrial_trade": 2,
-    "industrial_aid": 2,
-    "industrial_suppress": 2,
-    "industrial_bribe": 2,
-    "industrial_automate": 2,
-    "industrial_upgrade": 2,
-    "industrial_relief": 2,
-    "industrial_expand": 2,
-    "industrial_banking": 10,
-    "industrial_nationalize": 5,
-    "indushelp": 0,
+    "extrawork": 5, "extragamble": 1, "extracards": 1, "slots": 1,
+    "blackjack": 1, "job": 1, "arrest": 1, "rob": 1, "code": 0,
+    "darkweb": 0, "extrastore": 1, "extrainventory": 0, "setbalance": 0,
 
-    # ---- Extra economy ----
-    "extrawork": 5,
-    "extragamble": 1,
-    "extracards": 1,
-    "slots": 1,
-    "blackjack": 1,
-    "job": 1,
-    "arrest": 1,
-    "rob": 1,
-    "code": 0,
-    "darkweb": 0,
-    "extrastore": 1,
-    "extrainventory": 0,
-    "setbalance": 0,
+    "laststand": 60, "luckystrike": 60, "propaganda": 3,
+    "hiremercs": 10, "boosttech": 5, "mintgold": 10, "superharvest": 10,
+    "superspy": 10, "megainvent": 5, "backstab": 180, "bomb": 1,
+    "nuke": 5, "obliterate": 13, "sacrifice": 1440,
+    "clone": 30, "fakeflag": 30, "glitch_protocol": 30,
 
-    # ---- Hyperitems ----
-    "laststand": 60,
-    "luckystrike": 60,
-    "propaganda": 3,
-    "hiremercs": 10,
-    "boosttech": 5,
-    "mintgold": 10,
-    "superharvest": 10,
-    "superspy": 10,
-    "megainvent": 5,
-    "backstab": 180,
-    "bomb": 1,
-    "nuke": 5,
-    "obliterate": 13,
-    "sacrifice": 1440,
-    "clone": 30,
-    "fakeflag": 30,
-    "glitch_protocol": 30,
+    "corporation": 0, "megaproject": 0, "policy": 0, "policieshelp": 0,
+    "bank": 0, "bank_deposit": 0, "bank_withdraw": 0,
+    "bank_loan": 0, "bank_repay": 0,
+    "factions": 0, "unionstatus": 0,
 
-    # ---- Groups / banking / misc ----
-    "corporation": 0,
-    "megaproject": 0,
-    "policy": 0,
-    "policieshelp": 0,
-    "bank": 0,
-    "bank_deposit": 0,
-    "bank_withdraw": 0,
-    "bank_loan": 0,
-    "bank_repay": 0,
-    "factions": 0,
-    "unionstatus": 0,
+    "unite": 0, "acceptunite": 0, "declineunite": 0, "leave": 0,
+    "annex": 0, "acceptannex": 0, "declineannex": 0,
 
-    # ---- Unions ----
-    "unite": 0,
-    "acceptunite": 0,
-    "declineunite": 0,
-    "leave": 0,
-    "annex": 0,
-    "acceptannex": 0,
-    "declineannex": 0,
+    # ---- Phase 1 military ----
+    "createdivision": 0, "divisions": 0, "deletedivision": 0,
+    "renamedivision": 0, "movedivision": 0,
+    "creategeneral": 0, "generals": 0, "deletegeneral": 0,
+    "assigngeneral": 0, "unassigngeneral": 0,
 }
 
 CAPS = {
@@ -437,9 +330,6 @@ VICTORY = {
     "announcement_channels": [],
 }
 
-# ================================================================
-# POWER CURVE (THE CLIMB)
-# ================================================================
 POWER_CURVE = {
     "tech_gather_per_level":  0.012,
     "tech_work_per_level":    0.012,
@@ -456,9 +346,6 @@ POWER_CURVE = {
     "hyperitem_pop_divisor":  40000,
 }
 
-# ================================================================
-# FACTIONS
-# ================================================================
 FACTIONS = {
     "military": {
         "name": "Military",
@@ -498,7 +385,6 @@ FACTIONS = {
 FACTION_STARTING = {"military": 50, "merchant": 50, "people": 50}
 
 FACTION_EFFECTS = {
-    # ---- Economy ----
     "gather":        {"people": +2},
     "farm":          {"people": +4},
     "mine":          {"merchant": +2, "people": -2},
@@ -519,7 +405,6 @@ FACTION_EFFECTS = {
     "build_corporation": {"merchant": +4},
     "build_megaproject": {"merchant": +3, "military": +2},
 
-    # ---- Military ----
     "train_soldiers":   {"military": +4},
     "train_spies":      {"military": +2, "merchant": -2},
     "declare_war":      {"military": +4, "merchant": -2},
@@ -537,7 +422,6 @@ FACTION_EFFECTS = {
     "battle_victory":   {"military": +2},
     "battle_defeat":    {"military": -4},
 
-    # ---- Diplomacy ----
     "ally":             {"merchant": +4, "people": +2},
     "break_alliance":   {"merchant": -4, "people": -2},
     "trade_accepted":   {"merchant": +6},
@@ -545,25 +429,19 @@ FACTION_EFFECTS = {
     "coalition":        {"military": +2, "merchant": -2},
     "ceasefire":        {"merchant": +4},
 
-    # ---- Sanctions ----
     "impose_sanction":  {"military": +2, "merchant": -4},
     "lift_sanction":    {"merchant": +2},
 
-    # ---- Banking ----
     "bank_deposit":     {"merchant": +2},
     "bank_loan":        {"merchant": +2, "people": -2},
     "bank_default":     {"merchant": -10, "people": -4},
 
-    # ---- Territory ----
     "expand":           {"military": +2},
     "rapidexpansion":   {"military": +4, "merchant": -2},
     "reclaim_win":      {"military": +4},
     "lost_province":    {"people": -4},
 }
 
-# ================================================================
-# SANCTIONS
-# ================================================================
 SANCTIONS = {
     "impose_cost_gold": 10_000,
     "duration_hours": 24,
@@ -576,9 +454,6 @@ SANCTIONS = {
     ],
 }
 
-# ================================================================
-# BANKING
-# ================================================================
 BANKING = {
     "deposit_rate":    0.001,
     "loan_rate":       0.006,
@@ -589,4 +464,298 @@ BANKING = {
     "reputation_penalty_days": 7,
     "reputation_income_mult": 0.80,
     "tick_interval_seconds": 3600,
+}
+
+# ================================================================
+# PHASE 1 MILITARY — DIVISIONS, GENERALS, TECHNIQUES
+# ================================================================
+
+# ---- Division types ----
+# attack_mult / defense_mult are applied to the division's soldier count
+# during combat resolution (Ship 5). Cost is per-soldier in gold + food.
+DIVISION_TYPES = {
+    "infantry": {
+        "name": "Infantry",
+        "symbol": "o",
+        "color": "#2563eb",
+        "attack_mult": 1.00,
+        "defense_mult": 1.15,
+        "speed": 1.0,
+        "cost_per_soldier_gold": 5,
+        "cost_per_soldier_food": 3,
+        "terrain_bonus": ["urban", "forest"],
+        "terrain_penalty": ["plains"],
+        "description": "Cheap, resilient, defensive specialist.",
+    },
+    "armor": {
+        "name": "Armor",
+        "symbol": "s",
+        "color": "#dc2626",
+        "attack_mult": 1.40,
+        "defense_mult": 1.00,
+        "speed": 1.6,
+        "cost_per_soldier_gold": 15,
+        "cost_per_soldier_food": 6,
+        "terrain_bonus": ["plains"],
+        "terrain_penalty": ["mountain", "urban", "forest"],
+        "description": "Fast, hard-hitting, weak in rough terrain.",
+    },
+    "mechanized": {
+        "name": "Mechanized",
+        "symbol": "D",
+        "color": "#7c3aed",
+        "attack_mult": 1.20,
+        "defense_mult": 1.10,
+        "speed": 1.4,
+        "cost_per_soldier_gold": 12,
+        "cost_per_soldier_food": 5,
+        "terrain_bonus": ["plains", "urban"],
+        "terrain_penalty": ["mountain"],
+        "description": "Balanced mobility and firepower.",
+    },
+    "artillery": {
+        "name": "Artillery",
+        "symbol": "P",
+        "color": "#ea580c",
+        "attack_mult": 1.35,
+        "defense_mult": 0.85,
+        "speed": 0.7,
+        "cost_per_soldier_gold": 10,
+        "cost_per_soldier_food": 4,
+        "terrain_bonus": ["urban"],
+        "terrain_penalty": ["forest", "mountain"],
+        "description": "Devastating attack, slow and fragile.",
+    },
+    "airborne": {
+        "name": "Airborne",
+        "symbol": "^",
+        "color": "#06b6d4",
+        "attack_mult": 1.25,
+        "defense_mult": 0.90,
+        "speed": 2.0,
+        "cost_per_soldier_gold": 18,
+        "cost_per_soldier_food": 7,
+        "terrain_bonus": ["urban"],
+        "terrain_penalty": ["mountain"],
+        "description": "Can deploy deep behind enemy lines.",
+    },
+}
+
+# ---- Division creation limits ----
+DIVISION_LIMITS = {
+    "max_per_user": 10,
+    "min_size": 500,
+    "max_size": 50000,
+    "min_name_length": 2,
+    "max_name_length": 32,
+    "min_soldiers_in_civ": 500,
+}
+
+# ---- General positive traits ----
+GENERAL_POSITIVE_TRAITS = {
+    "aggressive": {
+        "name": "Aggressive",
+        "effect": "attack_mult_bonus",
+        "value": 1.10,
+        "description": "+10% attack strength.",
+    },
+    "defensive": {
+        "name": "Defensive",
+        "effect": "defense_mult_bonus",
+        "value": 1.10,
+        "description": "+10% defense strength.",
+    },
+    "logistician": {
+        "name": "Logistician",
+        "effect": "supply_drain_reduction",
+        "value": 0.30,
+        "description": "Supply drains 30% slower.",
+    },
+    "inspiring": {
+        "name": "Inspiring",
+        "effect": "morale_recovery_bonus",
+        "value": 1.15,
+        "description": "+15% morale recovery.",
+    },
+    "tactician": {
+        "name": "Tactician",
+        "effect": "technique_effectiveness_bonus",
+        "value": 1.05,
+        "description": "+5% technique effectiveness.",
+    },
+    "veteran": {
+        "name": "Veteran",
+        "effect": "experience_gain_bonus",
+        "value": 1.20,
+        "description": "+20% experience gain.",
+    },
+}
+
+# ---- General negative traits ----
+GENERAL_NEGATIVE_TRAITS = {
+    "reckless": {
+        "name": "Reckless",
+        "effect": "casualty_mult",
+        "value": 1.20,
+        "description": "+20% casualties suffered.",
+    },
+    "cautious": {
+        "name": "Cautious",
+        "effect": "attack_mult_penalty",
+        "value": 0.85,
+        "description": "-15% attack strength.",
+    },
+    "glory_hound": {
+        "name": "Glory Hound",
+        "effect": "ignore_orders_chance",
+        "value": 0.10,
+        "description": "10% chance to ignore orders.",
+    },
+    "paranoid": {
+        "name": "Paranoid",
+        "effect": "morale_penalty",
+        "value": 0.90,
+        "description": "-10% morale.",
+    },
+    "stubborn": {
+        "name": "Stubborn",
+        "effect": "retreat_refusal_loss_mult",
+        "value": 1.30,
+        "description": "Won't retreat. +30% losses if losing.",
+    },
+    "alcoholic": {
+        "name": "Alcoholic",
+        "effect": "supply_efficiency_penalty",
+        "value": 0.80,
+        "description": "Supply runs 20% less efficiently.",
+    },
+}
+
+# ---- General creation limits ----
+GENERAL_LIMITS = {
+    "max_per_user": 5,
+    "min_name_length": 2,
+    "max_name_length": 32,
+}
+
+# ---- Combat techniques ----
+# attack_mult / defense_mult: multipliers on the attacker's effective power.
+# counter: which technique this beats (1.25× vs that technique).
+# countered_by: technique that beats this one.
+# cost: one-time resource cost to plan an attack using this technique.
+TECHNIQUES = {
+    "blitzkrieg": {
+        "name": "Blitzkrieg",
+        "emoji": "⚡",
+        "attack_mult": 1.40,
+        "defense_mult": 0.90,
+        "cost": {"gold": 5000, "food": 1000},
+        "terrain_bonus": ["plains"],
+        "terrain_penalty": ["mountain", "urban", "forest"],
+        "counter": "attrition",
+        "countered_by": "defense_in_depth",
+        "description": "Fast armored assault. Weak in cities and mountains.",
+    },
+    "attrition": {
+        "name": "Attrition",
+        "emoji": "🪓",
+        "attack_mult": 1.00,
+        "defense_mult": 0.85,
+        "cost": {"gold": 2000, "food": 3000},
+        "terrain_bonus": ["forest", "mountain"],
+        "terrain_penalty": ["plains"],
+        "counter": "defense_in_depth",
+        "countered_by": "blitzkrieg",
+        "description": "Grind the enemy down. Slow but reliable.",
+    },
+    "encirclement": {
+        "name": "Encirclement",
+        "emoji": "🔗",
+        "attack_mult": 1.35,
+        "defense_mult": 0.80,
+        "cost": {"gold": 8000, "food": 2000},
+        "terrain_bonus": ["plains", "urban"],
+        "terrain_penalty": ["mountain"],
+        "counter": "blitzkrieg",
+        "countered_by": "attrition",
+        "description": "Cut supply lines. Devastating against mobile forces.",
+    },
+    "defense_in_depth": {
+        "name": "Defense in Depth",
+        "emoji": "🛡️",
+        "attack_mult": 0.85,
+        "defense_mult": 1.30,
+        "cost": {"gold": 3000, "food": 1500},
+        "terrain_bonus": ["mountain", "urban", "forest"],
+        "terrain_penalty": ["plains"],
+        "counter": "blitzkrieg",
+        "countered_by": "encirclement",
+        "description": "Layered defense. Very hard to break.",
+    },
+    "human_wave": {
+        "name": "Human Wave",
+        "emoji": "🌊",
+        "attack_mult": 1.20,
+        "defense_mult": 0.75,
+        "cost": {"gold": 1000, "food": 4000},
+        "terrain_bonus": [],
+        "terrain_penalty": [],
+        "counter": "attrition",
+        "countered_by": "blitzkrieg",
+        "description": "Sheer numbers. Cheap, costly in lives.",
+    },
+    "feint": {
+        "name": "Feint",
+        "emoji": "🎭",
+        "attack_mult": 0.90,
+        "defense_mult": 1.00,
+        "cost": {"gold": 4000, "food": 1000},
+        "terrain_bonus": ["urban"],
+        "terrain_penalty": [],
+        "counter": "encirclement",
+        "countered_by": "human_wave",
+        "description": "Draw enemy forces away. Frees other fronts.",
+    },
+}
+
+# ---- Attack directions (used by the wizard, cosmetic + small bonus) ----
+ATTACK_DIRECTIONS = {
+    "N":  {"name": "North",     "angle": 90,  "bonus_vs": [], "penalty_vs": []},
+    "NE": {"name": "Northeast", "angle": 45,  "bonus_vs": [], "penalty_vs": []},
+    "E":  {"name": "East",      "angle": 0,   "bonus_vs": [], "penalty_vs": []},
+    "SE": {"name": "Southeast", "angle": -45, "bonus_vs": [], "penalty_vs": []},
+    "S":  {"name": "South",     "angle": -90, "bonus_vs": [], "penalty_vs": []},
+    "SW": {"name": "Southwest", "angle": -135,"bonus_vs": [], "penalty_vs": []},
+    "W":  {"name": "West",      "angle": 180, "bonus_vs": [], "penalty_vs": []},
+    "NW": {"name": "Northwest", "angle": 135, "bonus_vs": [], "penalty_vs": []},
+}
+
+# ================================================================
+# MAP RENDERING
+# ================================================================
+MAP_RENDER = {
+    # Bounds padding around zoomed regions (fraction of bbox size)
+    "padding": 0.08,
+    # Minimum province area (km²) to display a country name label
+    "label_min_area": 30000,
+    # Hard cap on label count per map
+    "label_max_count": 40,
+    # Font sizes by view
+    "font_size": {
+        "world": 6,
+        "region": 8,
+        "warfront": 9,
+        "province": 10,
+    },
+    # Markers
+    "marker_size": 120,
+    "marker_alpha": 0.9,
+    # Cache TTLs in seconds
+    "cache_ttl": {
+        "world": 300,
+        "region": 120,
+        "warfront": 60,
+        "divisionmap": 60,
+        "province": 120,
+    },
 }

@@ -31,7 +31,7 @@ def _init_firebase() -> bool:
         cred = None
         source = None
 
-        # 1. Raw JSON string from environment (best for Railway)
+        # 1. Raw JSON string from environment (best for Render)
         raw = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
         if raw:
             try:
@@ -114,6 +114,11 @@ class Database:
 
     def close_connections(self):
         pass
+
+    # ---- Shared ID generator for divisions / generals / attacks ----
+    def _gen_entity_id(self, prefix: str) -> str:
+        """Generate a readable, low-collision ID for game entities."""
+        return f"{prefix}_{random.randint(1000000, 9999999)}"
 
     # -------------------- CIVILISATION CRUD --------------------
     def create_civilization(self, user_id: str, name: str, bonus_resources: Dict = None,
@@ -212,6 +217,16 @@ class Database:
                 for doc in self.client.collection(col_name).where(recipient_field, "==", user_id).stream():
                     batch.delete(doc.reference)
 
+            # Delete divisions, generals, pending attacks
+            for doc in self.client.collection("divisions").where("owner_id", "==", user_id).stream():
+                batch.delete(doc.reference)
+            for doc in self.client.collection("generals").where("owner_id", "==", user_id).stream():
+                batch.delete(doc.reference)
+            for doc in self.client.collection("pending_attacks").where("attacker_id", "==", user_id).stream():
+                batch.delete(doc.reference)
+            for doc in self.client.collection("pending_attacks").where("defender_id", "==", user_id).stream():
+                batch.delete(doc.reference)
+
             # Anonymise events
             for e in self.client.collection("events").where("user_id", "==", user_id).stream():
                 batch.update(e.reference, {"user_id": None})
@@ -223,7 +238,7 @@ class Database:
             # Delete the civilization itself
             batch.delete(civ_ref)
             batch.commit()
-            logger.info(f"Deleted civilization and all related data (including industrial revolution) for {user_id}")
+            logger.info(f"Deleted civilization and all related data (including divisions/generals) for {user_id}")
             return True
         except Exception as e:
             logger.error(f"delete_civilization error: {e}")
@@ -457,7 +472,7 @@ class Database:
                 current = doc.to_dict()
                 for k, v in updates.items():
                     if k == "level":
-                        current[k] = max(0, min(3, current.get(k, 0) + v))
+                        current[k] = max(0, min(4, current.get(k, 0) + v))
                     elif k == "boosted_soldiers":
                         current[k] = max(0, current.get(k, 0) + v)
                 doc_ref.set(current)
@@ -466,6 +481,340 @@ class Database:
             return True
         except Exception as e:
             logger.error(f"update_training error for {user_id}: {e}")
+            return False
+
+    # ================================================================
+    # DIVISIONS
+    # ================================================================
+    def create_division(self, user_id: str, name: str, division_type: str,
+                        size: int, location: str) -> Optional[str]:
+        """Create a new division. Returns division_id on success, None on failure."""
+        try:
+            division_id = self._gen_entity_id("div")
+            now = _utc_now_iso()
+            doc_ref = self.client.collection("divisions").document(division_id)
+            doc_ref.set({
+                "id": division_id,
+                "owner_id": str(user_id),
+                "name": name,
+                "type": division_type,
+                "size": int(size),
+                "location": location,
+                "general_id": None,
+                "morale": 100,
+                "supply": 100,
+                "veterancy": "green",
+                "experience": 0,
+                "created_at": now,
+                "last_active": now,
+            })
+            logger.info(f"Created division '{name}' ({division_type}, {size}) for {user_id} at {location}")
+            return division_id
+        except Exception as e:
+            logger.error(f"create_division error: {e}")
+            return None
+
+    def get_division(self, division_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            doc = self.client.collection("divisions").document(str(division_id)).get()
+            if not doc.exists:
+                return None
+            data = doc.to_dict()
+            data["id"] = doc.id
+            data.setdefault("general_id", None)
+            data.setdefault("morale", 100)
+            data.setdefault("supply", 100)
+            data.setdefault("veterancy", "green")
+            data.setdefault("experience", 0)
+            return data
+        except Exception as e:
+            logger.error(f"get_division error for {division_id}: {e}")
+            return None
+
+    def get_user_divisions(self, user_id: str) -> List[Dict[str, Any]]:
+        try:
+            docs = self.client.collection("divisions") \
+                       .where("owner_id", "==", str(user_id)) \
+                       .stream()
+            result = []
+            for doc in docs:
+                data = doc.to_dict()
+                data["id"] = doc.id
+                data.setdefault("general_id", None)
+                data.setdefault("morale", 100)
+                data.setdefault("supply", 100)
+                data.setdefault("veterancy", "green")
+                data.setdefault("experience", 0)
+                result.append(data)
+            result.sort(key=lambda x: x.get("created_at", ""))
+            return result
+        except Exception as e:
+            logger.error(f"get_user_divisions error for {user_id}: {e}")
+            return []
+
+    def get_divisions_in_province(self, province: str) -> List[Dict[str, Any]]:
+        """All divisions currently located in a given province/country."""
+        try:
+            docs = self.client.collection("divisions") \
+                       .where("location", "==", province) \
+                       .stream()
+            result = []
+            for doc in docs:
+                data = doc.to_dict()
+                data["id"] = doc.id
+                data.setdefault("general_id", None)
+                data.setdefault("morale", 100)
+                data.setdefault("supply", 100)
+                result.append(data)
+            return result
+        except Exception as e:
+            logger.error(f"get_divisions_in_province error for {province}: {e}")
+            return []
+
+    def update_division(self, division_id: str, updates: Dict[str, Any]) -> bool:
+        try:
+            updates["last_active"] = _utc_now_iso()
+            self.client.collection("divisions").document(str(division_id)).update(updates)
+            return True
+        except Exception as e:
+            logger.error(f"update_division error for {division_id}: {e}")
+            return False
+
+    def delete_division(self, division_id: str) -> bool:
+        try:
+            doc_ref = self.client.collection("divisions").document(str(division_id))
+            if doc_ref.get().exists:
+                doc_ref.delete()
+                logger.info(f"Deleted division {division_id}")
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"delete_division error for {division_id}: {e}")
+            return False
+
+    def rename_division(self, division_id: str, new_name: str) -> bool:
+        return self.update_division(division_id, {"name": new_name})
+
+    def move_division(self, division_id: str, new_location: str) -> bool:
+        return self.update_division(division_id, {"location": new_location})
+
+    def count_user_divisions(self, user_id: str) -> int:
+        """Cheap count — used for cap checks before creating a new division."""
+        try:
+            docs = self.client.collection("divisions") \
+                       .where("owner_id", "==", str(user_id)) \
+                       .stream()
+            return sum(1 for _ in docs)
+        except Exception as e:
+            logger.error(f"count_user_divisions error for {user_id}: {e}")
+            return 0
+
+    # ================================================================
+    # GENERALS
+    # ================================================================
+    def create_general(self, user_id: str, name: str, positive_trait: str,
+                       negative_trait: str, preferred_technique: str) -> Optional[str]:
+        """Create a new general. Returns general_id on success, None on failure."""
+        try:
+            general_id = self._gen_entity_id("gen")
+            now = _utc_now_iso()
+            doc_ref = self.client.collection("generals").document(general_id)
+            doc_ref.set({
+                "id": general_id,
+                "owner_id": str(user_id),
+                "name": name,
+                "rank": 1,
+                "experience": 0,
+                "positive_trait": positive_trait,
+                "negative_trait": negative_trait,
+                "preferred_technique": preferred_technique,
+                "medals": [],
+                "wounds": 0,
+                "battles_won": 0,
+                "battles_lost": 0,
+                "created_at": now,
+                "last_active": now,
+            })
+            logger.info(f"Created general '{name}' for {user_id}")
+            return general_id
+        except Exception as e:
+            logger.error(f"create_general error: {e}")
+            return None
+
+    def get_general(self, general_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            doc = self.client.collection("generals").document(str(general_id)).get()
+            if not doc.exists:
+                return None
+            data = doc.to_dict()
+            data["id"] = doc.id
+            data.setdefault("rank", 1)
+            data.setdefault("experience", 0)
+            data.setdefault("medals", [])
+            data.setdefault("wounds", 0)
+            data.setdefault("battles_won", 0)
+            data.setdefault("battles_lost", 0)
+            return data
+        except Exception as e:
+            logger.error(f"get_general error for {general_id}: {e}")
+            return None
+
+    def get_user_generals(self, user_id: str) -> List[Dict[str, Any]]:
+        try:
+            docs = self.client.collection("generals") \
+                       .where("owner_id", "==", str(user_id)) \
+                       .stream()
+            result = []
+            for doc in docs:
+                data = doc.to_dict()
+                data["id"] = doc.id
+                data.setdefault("rank", 1)
+                data.setdefault("experience", 0)
+                data.setdefault("medals", [])
+                data.setdefault("wounds", 0)
+                data.setdefault("battles_won", 0)
+                data.setdefault("battles_lost", 0)
+                result.append(data)
+            # Highest rank first, then most experienced
+            result.sort(key=lambda x: (-x.get("rank", 1), -x.get("experience", 0)))
+            return result
+        except Exception as e:
+            logger.error(f"get_user_generals error for {user_id}: {e}")
+            return []
+
+    def update_general(self, general_id: str, updates: Dict[str, Any]) -> bool:
+        try:
+            updates["last_active"] = _utc_now_iso()
+            self.client.collection("generals").document(str(general_id)).update(updates)
+            return True
+        except Exception as e:
+            logger.error(f"update_general error for {general_id}: {e}")
+            return False
+
+    def delete_general(self, general_id: str) -> bool:
+        """Delete a general and unassign them from any division they were attached to."""
+        try:
+            # Unassign from any division first
+            docs = self.client.collection("divisions") \
+                       .where("general_id", "==", str(general_id)) \
+                       .stream()
+            for doc in docs:
+                doc.reference.update({"general_id": None})
+
+            # Then delete the general document
+            doc_ref = self.client.collection("generals").document(str(general_id))
+            if doc_ref.get().exists:
+                doc_ref.delete()
+                logger.info(f"Deleted general {general_id}")
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"delete_general error for {general_id}: {e}")
+            return False
+
+    def assign_general_to_division(self, division_id: str, general_id: str) -> bool:
+        """Assign a general to a division.
+
+        - Verifies both exist and share the same owner.
+        - Unassigns the general from any previous division.
+        """
+        try:
+            gen = self.get_general(general_id)
+            div = self.get_division(division_id)
+            if not gen or not div:
+                return False
+            if str(gen.get("owner_id")) != str(div.get("owner_id")):
+                logger.warning(f"Owner mismatch: gen {general_id} vs div {division_id}")
+                return False
+
+            # Unassign from any other division that currently has this general
+            other_docs = self.client.collection("divisions") \
+                             .where("general_id", "==", str(general_id)) \
+                             .stream()
+            for doc in other_docs:
+                if doc.id != str(division_id):
+                    doc.reference.update({"general_id": None})
+
+            # Assign
+            self.client.collection("divisions").document(str(division_id)).update({
+                "general_id": str(general_id),
+                "last_active": _utc_now_iso(),
+            })
+            return True
+        except Exception as e:
+            logger.error(f"assign_general_to_division error: {e}")
+            return False
+
+    def unassign_general(self, division_id: str) -> bool:
+        return self.update_division(division_id, {"general_id": None})
+
+    def count_user_generals(self, user_id: str) -> int:
+        try:
+            docs = self.client.collection("generals") \
+                       .where("owner_id", "==", str(user_id)) \
+                       .stream()
+            return sum(1 for _ in docs)
+        except Exception as e:
+            logger.error(f"count_user_generals error for {user_id}: {e}")
+            return 0
+
+    # ================================================================
+    # PENDING ATTACKS (wizard state for the attack panel)
+    # ================================================================
+    def save_pending_attack(self, attack_id: str, data: Dict[str, Any]) -> bool:
+        try:
+            self.client.collection("pending_attacks").document(str(attack_id)).set(data)
+            return True
+        except Exception as e:
+            logger.error(f"save_pending_attack error: {e}")
+            return False
+
+    def get_pending_attack(self, attack_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            doc = self.client.collection("pending_attacks").document(str(attack_id)).get()
+            if not doc.exists:
+                return None
+            data = doc.to_dict()
+            data["id"] = doc.id
+            return data
+        except Exception as e:
+            logger.error(f"get_pending_attack error for {attack_id}: {e}")
+            return None
+
+    def get_pending_attacks_for_user(self, user_id: str) -> List[Dict[str, Any]]:
+        try:
+            docs = self.client.collection("pending_attacks") \
+                       .where("attacker_id", "==", str(user_id)) \
+                       .where("status", "==", "pending") \
+                       .stream()
+            result = []
+            for doc in docs:
+                data = doc.to_dict()
+                data["id"] = doc.id
+                result.append(data)
+            return result
+        except Exception as e:
+            logger.error(f"get_pending_attacks_for_user error: {e}")
+            return []
+
+    def update_pending_attack(self, attack_id: str, updates: Dict[str, Any]) -> bool:
+        try:
+            updates["last_active"] = _utc_now_iso()
+            self.client.collection("pending_attacks").document(str(attack_id)).update(updates)
+            return True
+        except Exception as e:
+            logger.error(f"update_pending_attack error for {attack_id}: {e}")
+            return False
+
+    def delete_pending_attack(self, attack_id: str) -> bool:
+        try:
+            doc_ref = self.client.collection("pending_attacks").document(str(attack_id))
+            if doc_ref.get().exists:
+                doc_ref.delete()
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"delete_pending_attack error for {attack_id}: {e}")
             return False
 
     # -------------------- INDUSTRIAL REVOLUTION --------------------
@@ -742,7 +1091,7 @@ class Database:
             logger.error(f"delete_trade_proposal error: {e}")
             return False
 
-    # -------------------- SHARED-ALLIANCE LOOKUP (optional helper) --------------------
+    # -------------------- SHARED-ALLIANCE LOOKUP --------------------
     def find_alliances_containing_both(self, user_a: str, user_b: str) -> list:
         try:
             docs = self.client.collection("alliances").where("members", "array_contains", user_a).stream()
@@ -1227,7 +1576,8 @@ class Database:
                 "alliance_invitations", "territories", "territory_history",
                 "wars", "peace_offers", "navy", "airforce", "military_tech",
                 "training", "industrial_revolutions",
-                "alliance_proposals", "trade_proposals"
+                "alliance_proposals", "trade_proposals",
+                "divisions", "generals", "pending_attacks",
             ]
             for col_name in top_collections:
                 col_data = {}
@@ -1276,7 +1626,8 @@ class Database:
                 "alliance_invitations", "territories",
                 "territory_history", "navy", "airforce",
                 "military_tech", "training", "industrial_revolutions",
-                "alliance_proposals", "trade_proposals"
+                "alliance_proposals", "trade_proposals",
+                "divisions", "generals", "pending_attacks",
             ]
             for col_name in collections:
                 docs = self.client.collection(col_name).stream()
@@ -1352,7 +1703,6 @@ class Database:
             return False
 
     # -------------------- VICTORY CONDITIONS --------------------
-       # -------------------- VICTORY CONDITIONS --------------------
     def get_victory_progress(self, user_id: str) -> Dict[str, Any]:
         """Get progress toward each victory condition."""
         civ = self.get_civilization(user_id)
@@ -1375,7 +1725,7 @@ class Database:
         citizens = civ.get('population', {}).get('citizens', 1)
         gdp_per_citizen = gold / citizens if citizens > 0 else 0
 
-        # --- Diplomatic (single pass, no double read) ---
+        # --- Diplomatic (single pass) ---
         alliance_count = 0
         alliance_score = 0
         for doc in self.client.collection("alliances") \
@@ -1426,6 +1776,7 @@ class Database:
                 "in_alliance": alliance_count > 0,
             },
         }
+
     def check_victory(self, user_id: str) -> Optional[Dict[str, bool]]:
         """Check if a player has achieved any victory condition."""
         progress = self.get_victory_progress(user_id)

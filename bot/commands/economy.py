@@ -55,7 +55,6 @@ class EconomyCommands(commands.Cog):
         self._tasks = []
 
     async def cog_load(self):
-        self._tasks.append(asyncio.create_task(self._corporation_loop()))
         self._tasks.append(asyncio.create_task(self._investment_bank_loop()))
 
     async def cog_unload(self):
@@ -125,34 +124,8 @@ class EconomyCommands(commands.Cog):
             return 1.0
 
     # =================================================================
-    # PASSIVE LOOPS
+    # PASSIVE LOOP — player bank only (corp loop moved to corporations.py)
     # =================================================================
-    async def _corporation_loop(self):
-        await self.bot.wait_until_ready()
-        while not self.bot.is_closed():
-            await asyncio.sleep(3600)
-            try:
-                for civ in self.db.get_all_civilizations():
-                    corps = civ.get('corporations', [])
-                    if corps:
-                        total_income = 0
-                        for corp in corps:
-                            level = corp.get('level', 1)
-                            total_income += self._get_corp_income(civ, level)
-                        if total_income > 0:
-                            self.civ_manager.update_resources(civ['user_id'], {"gold": total_income})
-                            logger.info(f"Corporation paid {total_income} gold to {civ['user_id']}")
-            except Exception as e:
-                logger.error(f"Corporation loop error: {e}")
-
-    def _get_corp_income(self, civ: dict, level: int) -> int:
-        tech = civ['military']['tech_level']
-        base = level * 500
-        tech_multiplier = 1 + (tech * 0.06)
-        if tech < 5:
-            return int(base * tech_multiplier / 2)
-        return int(base * tech_multiplier)
-
     async def _investment_bank_loop(self):
         await self.bot.wait_until_ready()
         while not self.bot.is_closed():
@@ -256,29 +229,17 @@ Return ONLY valid JSON."""
     # CIVIL WAR HANDLER
     # =================================================================
     async def check_civil_war_and_proceed(self, ctx, user_id: str) -> bool:
-        """Returns True if the action may proceed.
-
-        - No civil war at all → allow.
-        - Single territory (can't split) → allow silently.
-        - Civil war just triggered → post the CIVIL WAR ERUPTS embed + AI news, block.
-        - Civil war already active → block silently.
-        """
+        """Silent civil-war gate. Returns True if the action may proceed."""
         try:
             result = self.civ_manager.check_civil_war_risk(user_id)
-
-            # Already in a war? Block silently.
             state_active = self.civ_manager.get_civil_war_state(user_id)
             if state_active and not result:
                 return False
-
             if not result:
                 return True
-
             if result.get("single_territory") or not result.get("state"):
-                # Single-territory civs can't split — allow the action silently.
                 return True
 
-            # Civil war just triggered — post the big red embed
             state = result.get("state", {})
             civ = self.civ_manager.get_civilization(user_id)
             civ_name = civ['name'] if civ else "your nation"
@@ -326,7 +287,6 @@ Return ONLY valid JSON."""
     # =================================================================
     # EARLY-GAME COMMANDS
     # =================================================================
-
     @commands.command(name='gather')
     @check_cooldown_decorator("gather")
     @daily_limit_decorator("gather")
@@ -342,7 +302,9 @@ Return ONLY valid JSON."""
         if self.db.get_testing_mode():
             gathered = {r: config.TESTING_GAIN for r in ["gold", "wood", "stone", "food"]}
             self.civ_manager.update_resources(user_id, gathered)
-            await ctx.send(embed=create_embed("🧪 TESTING MODE", f"Gained {config.TESTING_GAIN} of each resource!", guilded.Color.gold()))
+            await ctx.send(embed=create_embed("🧪 TESTING MODE",
+                                              f"Gained {config.TESTING_GAIN} of each resource!",
+                                              guilded.Color.gold()))
             return
 
         possible_resources = ['gold', 'wood', 'stone', 'food']
@@ -419,7 +381,9 @@ Return ONLY valid JSON."""
         self.civ_manager.apply_faction_effects(user_id, "work")
 
         new_rate = self.civ_manager.get_employment_rate(user_id)
-        embed = create_embed("💼 Citizens Employed", f"Employed {format_number(amount)} citizens for {format_number(gains['gold'])} gold!", guilded.Color.green())
+        embed = create_embed("💼 Citizens Employed",
+                             f"Employed {format_number(amount)} citizens for {format_number(gains['gold'])} gold!",
+                             guilded.Color.green())
         embed.add_field(name="Employment Rate", value=f"{new_rate:.1f}%", inline=True)
         if lucky_used:
             embed.set_footer(text="🍀 Lucky Strike! Doubled gold.")
@@ -543,7 +507,9 @@ Return ONLY valid JSON."""
         self.civ_manager.update_population(user_id, {"happiness": 3})
         self.civ_manager.apply_faction_effects(user_id, "harvest")
 
-        embed = create_embed("🌽 Great Harvest", f"Bountiful harvest: {format_number(gains['food'])} food!", guilded.Color.gold())
+        embed = create_embed("🌽 Great Harvest",
+                             f"Bountiful harvest: {format_number(gains['food'])} food!",
+                             guilded.Color.gold())
         embed.add_field(name="Morale Boost", value="+3 happiness", inline=False)
         if lucky_used:
             embed.set_footer(text="🍀 Lucky Strike! Doubled food.")
@@ -680,7 +646,9 @@ Return ONLY valid JSON."""
             self.civ_manager.update_resources(user_id, loot)
             self.civ_manager.apply_faction_effects(user_id, "raidcaravan")
 
-            embed = create_embed("🏴‍☠️ Caravan Raid - Success!", "Raiders ambushed a wealthy caravan!", guilded.Color.green())
+            embed = create_embed("🏴‍☠️ Caravan Raid - Success!",
+                                 "Raiders ambushed a wealthy caravan!",
+                                 guilded.Color.green())
             icons = {"gold": "🪙", "food": "🌾", "wood": "🪵", "stone": "🪨"}
             embed.add_field(name="Loot",
                             value="\n".join(f"{icons[r]} {format_number(a)} {r.capitalize()}" for r, a in loot.items() if a > 0),
@@ -690,13 +658,14 @@ Return ONLY valid JSON."""
         else:
             loss = random.randint(1, 3)
             self.civ_manager.update_military(user_id, {"soldiers": -loss})
-            embed = create_embed("🏴‍☠️ Caravan Raid - Failed!", f"Guards were too strong. Lost {loss} soldiers.", guilded.Color.red())
+            embed = create_embed("🏴‍☠️ Caravan Raid - Failed!",
+                                 f"Guards were too strong. Lost {loss} soldiers.",
+                                 guilded.Color.red())
         await ctx.send(embed=embed)
 
     # =================================================================
     # LATE-GAME COMMANDS
     # =================================================================
-
     @commands.command(name='globaltrade')
     @check_cooldown_decorator("globaltrade")
     @daily_limit_decorator("globaltrade")
@@ -765,9 +734,13 @@ Return ONLY valid JSON."""
             deposits = bank.get('deposits', 0)
             tech = civ['military']['tech_level']
             rate = (0.005 + (tech * 0.001)) * 100
-            embed = create_embed("🏦 Investment Bank Balance", f"Current deposits: {format_number(deposits)} gold", guilded.Color.blue())
+            embed = create_embed("🏦 Investment Bank Balance",
+                                 f"Current deposits: {format_number(deposits)} gold",
+                                 guilded.Color.blue())
             embed.add_field(name="Interest Rate", value=f"{rate:.2f}% per hour", inline=True)
-            embed.add_field(name="Projected Daily Growth", value=f"{format_number(int(deposits * (rate/100) * 24))} gold/day", inline=True)
+            embed.add_field(name="Projected Daily Growth",
+                            value=f"{format_number(int(deposits * (rate/100) * 24))} gold/day",
+                            inline=True)
             await ctx.send(embed=embed)
             return
 
@@ -862,7 +835,9 @@ Return ONLY valid JSON."""
         boost = int((100 - current) * 0.5)
         self.civ_manager.update_population(user_id, {"happiness": boost})
         self.civ_manager.apply_faction_effects(user_id, "cheerup")
-        await ctx.send(embed=create_embed("😊 Cheer Up!", f"Citizens are much happier! (+{boost} happiness)", guilded.Color.green()))
+        await ctx.send(embed=create_embed("😊 Cheer Up!",
+                                          f"Citizens are much happier! (+{boost} happiness)",
+                                          guilded.Color.green()))
 
     @commands.command(name='buytech', aliases=['buylevel'])
     @check_cooldown_decorator("buytech")
@@ -890,82 +865,14 @@ Return ONLY valid JSON."""
                                           guilded.Color.blue()))
 
     # =================================================================
-    # CORPORATIONS
-    # =================================================================
-    @commands.group(name='corporation', invoke_without_command=True)
-    async def corporation(self, ctx):
-        user_id = str(ctx.author.id)
-        civ = self.civ_manager.get_civilization(user_id)
-        if not civ:
-            await ctx.send("❌ You need to start a civilization first!")
-            return
-        corps = civ.get('corporations', [])
-        if not corps:
-            await ctx.send("📭 No corporations. Use `.corporation build` to start.")
-            return
-        embed = create_embed("🏢 Your Corporations", "", guilded.Color.blue())
-        total_income = 0
-        for i, corp in enumerate(corps, 1):
-            level = corp.get('level', 1)
-            income = self._get_corp_income(civ, level)
-            total_income += income
-            embed.add_field(name=f"Corp #{i}", value=f"Level: {level}\nIncome: {format_number(income)} gold/hour", inline=True)
-        embed.add_field(name="Total Passive Income", value=f"{format_number(total_income)} gold/hour", inline=False)
-        await ctx.send(embed=embed)
-
-    @corporation.command(name='build')
-    async def corp_build(self, ctx):
-        user_id = str(ctx.author.id)
-        civ = self.civ_manager.get_civilization(user_id)
-        if not civ:
-            await ctx.send("❌ You need to start a civilization first!")
-            return
-        corps = civ.get('corporations', [])
-        if len(corps) >= 5:
-            await ctx.send("❌ Maximum 5 corporations!")
-            return
-        if civ['resources']['gold'] < 100000:
-            await ctx.send("❌ You need 100,000 gold!")
-            return
-        self.civ_manager.spend_resources(user_id, {"gold": 100000})
-        corps.append({"level": 1})
-        self.db.update_civilization(user_id, {"corporations": corps})
-        self.civ_manager.apply_faction_effects(user_id, "build_corporation")
-        await ctx.send("🏢 Corporation built!")
-
-    @corporation.command(name='upgrade')
-    async def corp_upgrade(self, ctx, corp_number: int = 1):
-        user_id = str(ctx.author.id)
-        civ = self.civ_manager.get_civilization(user_id)
-        if not civ:
-            await ctx.send("❌ You need a civilization first!")
-            return
-        corps = civ.get('corporations', [])
-        if not corps:
-            await ctx.send("❌ No corporations to upgrade!")
-            return
-        if corp_number < 1 or corp_number > len(corps):
-            await ctx.send(f"❌ Invalid number! 1-{len(corps)}.")
-            return
-        if civ['resources']['gold'] < 200000:
-            await ctx.send("❌ You need 200,000 gold!")
-            return
-        self.civ_manager.spend_resources(user_id, {"gold": 200000})
-        corps[corp_number - 1]['level'] += 1
-        self.db.update_civilization(user_id, {"corporations": corps})
-        await ctx.send(f"⬆️ Corporation #{corp_number} → level {corps[corp_number - 1]['level']}!")
-
-    @corporation.command(name='list', aliases=['view'])
-    async def corp_list(self, ctx):
-        await self.corporation(ctx)
-
-    # =================================================================
-    # MEGAPROJECTS
+    # MEGAPROJECTS (corporation group removed — moved to corporations.py)
     # =================================================================
     @commands.group(name='megaproject', invoke_without_command=True)
     async def megaproject(self, ctx):
         embed = create_embed("🏗️ Megaprojects",
-                             "**Custom:** `.megaproject build <description>`\n**Presets:** `.megaproject preset <name>`\n**List presets:** `.megaproject presets`",
+                             "**Custom:** `.megaproject build <description>`\n"
+                             "**Presets:** `.megaproject preset <name>`\n"
+                             "**List presets:** `.megaproject presets`",
                              guilded.Color.gold())
         await ctx.send(embed=embed)
 
@@ -1014,7 +921,9 @@ Return ONLY valid JSON."""
             bonuses[ek] = bonuses.get(ek, 0) + ev
         self.db.update_civilization(user_id, {"megaprojects": built, "bonuses": bonuses})
         self.civ_manager.apply_faction_effects(user_id, "build_megaproject")
-        await ctx.send(embed=create_embed(f"🏗️ {data['name']} Complete!", data['description'], guilded.Color.gold()))
+        await ctx.send(embed=create_embed(f"🏗️ {data['name']} Complete!",
+                                          data['description'],
+                                          guilded.Color.gold()))
 
     @megaproject.command(name='build')
     async def megaproject_build_custom(self, ctx, *, description: str):
@@ -1055,7 +964,8 @@ Return ONLY valid JSON."""
         })
         embed = create_embed("🏗️ Custom Megaproject Built!",
                              f"**Project:** {proj_desc}\n\n**Cost:**\n" +
-                             "\n".join([f"{'🪙' if res=='gold' else '🌾' if res=='food' else '🪵' if res=='wood' else '🪨'} {format_number(amt)} {res.capitalize()}" for res, amt in cost.items()]),
+                             "\n".join([f"{'🪙' if res=='gold' else '🌾' if res=='food' else '🪵' if res=='wood' else '🪨'} {format_number(amt)} {res.capitalize()}"
+                                        for res, amt in cost.items()]),
                              guilded.Color.gold())
         await ctx.send(embed=embed)
 
@@ -1079,7 +989,9 @@ Return ONLY valid JSON."""
                 pdata = config.POLICIES[pk]
                 ld = pdata['levels'].get(level)
                 if ld:
-                    embed.add_field(name=f"{pdata['name']} (Level {level})", value=ld['desc'], inline=False)
+                    embed.add_field(name=f"{pdata['name']} (Level {level})",
+                                    value=ld['desc'],
+                                    inline=False)
         await ctx.send(embed=embed)
 
     @policy.command(name='enable')
@@ -1099,7 +1011,7 @@ Return ONLY valid JSON."""
             return
         active = civ.get('policies', {})
         if pk in active:
-            await ctx.send(f"❌ Already active.")
+            await ctx.send("❌ Already active.")
             return
         pdata = config.POLICIES[pk]
         ld = pdata['levels'][1]
@@ -1131,7 +1043,7 @@ Return ONLY valid JSON."""
             return
         active = civ.get('policies', {})
         if pk not in active:
-            await ctx.send(f"❌ Not active. Enable first.")
+            await ctx.send("❌ Not active. Enable first.")
             return
         pdata = config.POLICIES[pk]
         cl = active[pk]
@@ -1326,11 +1238,17 @@ Return ONLY valid JSON."""
                              guilded.Color.gold())
         embed.add_field(name="Social Cost", value=f"😡 Happiness: {happiness_cost}", inline=True)
         if capped:
-            embed.add_field(name="⚠️ Hard Cap", value=f"Tax capped at {format_number(TAX_CAP)} per collection.", inline=False)
+            embed.add_field(name="⚠️ Hard Cap",
+                            value=f"Tax capped at {format_number(TAX_CAP)} per collection.",
+                            inline=False)
         if population_loss > 0:
-            embed.add_field(name="💀 Population Loss", value=f"{population_loss} citizens emigrated!", inline=False)
+            embed.add_field(name="💀 Population Loss",
+                            value=f"{population_loss} citizens emigrated!",
+                            inline=False)
         if soldier_loss > 0:
-            embed.add_field(name="⚔️ Desertion", value=f"{soldier_loss} soldiers deserted!", inline=False)
+            embed.add_field(name="⚔️ Desertion",
+                            value=f"{soldier_loss} soldiers deserted!",
+                            inline=False)
         if riot:
             embed.add_field(name="🔥 Tax Revolt", value="Riots broke out!", inline=False)
         if lucky_used:
@@ -1377,11 +1295,11 @@ Return ONLY valid JSON."""
             color = guilded.Color.green()
         elif roll < 0.40:
             winnings = bet
-            result = f"🎰 Break even."
+            result = "🎰 Break even."
             color = guilded.Color.blue()
         else:
             winnings = 0
-            result = f"🎰 No luck."
+            result = "🎰 No luck."
             color = guilded.Color.red()
 
         if winnings > 0:
@@ -1417,7 +1335,9 @@ Return ONLY valid JSON."""
 
         self.civ_manager.spend_resources(user_id, {"gold": amount})
         self.civ_manager.apply_faction_effects(user_id, "invest")
-        await ctx.send(embed=create_embed("💼 Investment Made", f"Invested {format_number(amount)} gold. Returns in 2h.", guilded.Color.blue()))
+        await ctx.send(embed=create_embed("💼 Investment Made",
+                                          f"Invested {format_number(amount)} gold. Returns in 2h.",
+                                          guilded.Color.blue()))
 
         async def investment_return():
             await asyncio.sleep(7200)
@@ -1461,7 +1381,9 @@ Return ONLY valid JSON."""
         self.civ_manager.update_employment(user_id, -amount)
         self.civ_manager.update_population(user_id, {"happiness": -2})
         new_rate = self.civ_manager.get_employment_rate(user_id)
-        embed = create_embed("🚗 Citizens Unemployed", f"Unemployed {format_number(amount)} citizens.", guilded.Color.red())
+        embed = create_embed("🚗 Citizens Unemployed",
+                             f"Unemployed {format_number(amount)} citizens.",
+                             guilded.Color.red())
         embed.add_field(name="Employment Rate", value=f"{new_rate:.1f}%", inline=True)
         await ctx.send(embed=embed)
 
@@ -1486,7 +1408,9 @@ Return ONLY valid JSON."""
             boost = int(boost * 1.2)
         self.civ_manager.update_population(user_id, {"happiness": boost})
         self.civ_manager.apply_faction_effects(user_id, "festival")
-        await ctx.send(embed=create_embed("🎉 Grand Festival", f"+{boost} happiness!", guilded.Color.gold()))
+        await ctx.send(embed=create_embed("🎉 Grand Festival",
+                                          f"+{boost} happiness!",
+                                          guilded.Color.gold()))
 
     @commands.command(name='cheer')
     @check_cooldown_decorator("cheer")
@@ -1508,7 +1432,9 @@ Return ONLY valid JSON."""
             boost = int(boost * 1.1)
         self.civ_manager.update_population(user_id, {"happiness": boost})
         self.civ_manager.apply_faction_effects(user_id, "cheer")
-        await ctx.send(embed=create_embed("😊 Spreading Cheer", f"+{boost} happiness!", guilded.Color.green()))
+        await ctx.send(embed=create_embed("😊 Spreading Cheer",
+                                          f"+{boost} happiness!",
+                                          guilded.Color.green()))
 
     @commands.command(name='sell')
     async def sell_hyper_item(self, ctx, *, item_name: str = None):
@@ -1537,7 +1463,9 @@ Return ONLY valid JSON."""
         gold_value = min(prices.get(item_name, random.randint(50, 150)), config.CAPS["sell"])
         self.civ_manager.use_hyper_item(user_id, item_name)
         self.civ_manager.update_resources(user_id, {"gold": gold_value})
-        await ctx.send(embed=create_embed("💰 Item Sold!", f"Sold '{item_name}' for {format_number(gold_value)} gold!", guilded.Color.gold()))
+        await ctx.send(embed=create_embed("💰 Item Sold!",
+                                          f"Sold '{item_name}' for {format_number(gold_value)} gold!",
+                                          guilded.Color.gold()))
 
     @commands.command(name='advertise')
     @check_cooldown_decorator("advertise")
@@ -1569,7 +1497,9 @@ Return ONLY valid JSON."""
             total = int(total * 0.8)
         self.civ_manager.update_population(user_id, {"citizens": total})
         self.civ_manager.apply_faction_effects(user_id, "advertise")
-        await ctx.send(embed=create_embed("📢 Advertising Campaign", f"{format_number(total)} people became citizens!", guilded.Color.green()))
+        await ctx.send(embed=create_embed("📢 Advertising Campaign",
+                                          f"{format_number(total)} people became citizens!",
+                                          guilded.Color.green()))
 
     @commands.command(name='census')
     async def show_census(self, ctx):
@@ -1581,7 +1511,9 @@ Return ONLY valid JSON."""
         resources = civ['resources']
         population = civ['population']
         employment_rate = self.civ_manager.get_employment_rate(user_id)
-        embed = create_embed("📊 National Census Report", f"Status of {civ['name']}", guilded.Color.blue())
+        embed = create_embed("📊 National Census Report",
+                             f"Status of {civ['name']}",
+                             guilded.Color.blue())
         embed.add_field(name="💰 Resources",
                         value=(f"🪙 Gold: {format_number(resources['gold'])}\n"
                                f"🌾 Food: {format_number(resources['food'])}\n"
@@ -1624,12 +1556,18 @@ Return ONLY valid JSON."""
         if random.random() < success_chance:
             self.civ_manager.update_population(user_id, {"citizens": -number})
             self.civ_manager.update_military(user_id, {"soldiers": number})
-            embed = create_embed("🎖️ Recruitment Success!", f"{format_number(number)} citizens enlisted!", guilded.Color.green())
-            embed.add_field(name="New Military", value=f"🛡️ {format_number(civ['military']['soldiers'] + number)} Soldiers", inline=True)
+            embed = create_embed("🎖️ Recruitment Success!",
+                                 f"{format_number(number)} citizens enlisted!",
+                                 guilded.Color.green())
+            embed.add_field(name="New Military",
+                            value=f"🛡️ {format_number(civ['military']['soldiers'] + number)} Soldiers",
+                            inline=True)
         else:
             lost = min(number * 2, current // 2)
             self.civ_manager.update_population(user_id, {"citizens": -lost, "happiness": -5})
-            embed = create_embed("🎖️ Recruitment Failed!", f"{format_number(lost)} citizens fled.", guilded.Color.red())
+            embed = create_embed("🎖️ Recruitment Failed!",
+                                 f"{format_number(lost)} citizens fled.",
+                                 guilded.Color.red())
         await ctx.send(embed=embed)
 
     @commands.command(name='buysoldiers')
@@ -1648,7 +1586,9 @@ Return ONLY valid JSON."""
             return
         self.civ_manager.spend_resources(user_id, {"gold": cost})
         self.civ_manager.update_military(user_id, {"soldiers": amount})
-        await ctx.send(embed=create_embed("⚔️ Soldiers Bought!", f"Bought {format_number(amount)} soldiers for {format_number(cost)} gold!", guilded.Color.green()))
+        await ctx.send(embed=create_embed("⚔️ Soldiers Bought!",
+                                          f"Bought {format_number(amount)} soldiers for {format_number(cost)} gold!",
+                                          guilded.Color.green()))
 
     @commands.command(name='burn')
     async def burn_resources(self, ctx):
@@ -1658,14 +1598,20 @@ Return ONLY valid JSON."""
             await ctx.send("❌ You need a civilization first!")
             return
         resources = civ['resources']
-        changes = {res: 1000 - resources.get(res, 0) for res in ['gold', 'food', 'wood', 'stone'] if resources.get(res, 0) > 1000}
+        changes = {res: 1000 - resources.get(res, 0)
+                   for res in ['gold', 'food', 'wood', 'stone']
+                   if resources.get(res, 0) > 1000}
         if not changes:
             await ctx.send("✅ All resources already ≤1000.")
             return
         self.civ_manager.update_resources(user_id, changes)
-        embed = create_embed("🔥 Resources Burned!", "Excess reduced to 1000 each.", guilded.Color.orange())
+        embed = create_embed("🔥 Resources Burned!",
+                             "Excess reduced to 1000 each.",
+                             guilded.Color.orange())
         for res, change in changes.items():
-            embed.add_field(name=res.capitalize(), value=f"{format_number(resources[res])} → 1000", inline=True)
+            embed.add_field(name=res.capitalize(),
+                            value=f"{format_number(resources[res])} → 1000",
+                            inline=True)
         await ctx.send(embed=embed)
 
     @commands.command(name='immigration')
@@ -1684,19 +1630,23 @@ Return ONLY valid JSON."""
         employment_rate = self.civ_manager.get_employment_rate(user_id) / 100
         employment_factor = 1 + employment_rate * config.ECONOMY["immigration_employment_coeff"]
         territory_factor = get_territory_modifier(civ['territory']['land_size'])
-        base = random.randint(config.ECONOMY["immigration_citizen_min"], config.ECONOMY["immigration_citizen_max"])
+        base = random.randint(config.ECONOMY["immigration_citizen_min"],
+                              config.ECONOMY["immigration_citizen_max"])
         gained = int(base * employment_factor * territory_factor * tech_multiplier)
         gained = min(gained, config.CAPS["immigration"] * tech_multiplier)
         self.civ_manager.update_population(user_id, {"citizens": gained})
 
-        happiness_loss = random.randint(config.ECONOMY["immigration_happiness_loss_min"], config.ECONOMY["immigration_happiness_loss_max"])
+        happiness_loss = random.randint(config.ECONOMY["immigration_happiness_loss_min"],
+                                        config.ECONOMY["immigration_happiness_loss_max"])
         self.civ_manager.update_population(user_id, {"happiness": -happiness_loss})
 
         riot_triggered = False
         if random.random() < config.ECONOMY["immigration_riot_chance"]:
             riot_triggered = True
-            extra_h = random.randint(config.ECONOMY["immigration_riot_happiness_loss_min"], config.ECONOMY["immigration_riot_happiness_loss_max"])
-            s_loss = random.randint(config.ECONOMY["immigration_riot_soldier_loss_min"], config.ECONOMY["immigration_riot_soldier_loss_max"])
+            extra_h = random.randint(config.ECONOMY["immigration_riot_happiness_loss_min"],
+                                     config.ECONOMY["immigration_riot_happiness_loss_max"])
+            s_loss = random.randint(config.ECONOMY["immigration_riot_soldier_loss_min"],
+                                    config.ECONOMY["immigration_riot_soldier_loss_max"])
             self.civ_manager.update_population(user_id, {"happiness": -extra_h})
             self.civ_manager.update_military(user_id, {"soldiers": -s_loss})
             self.civ_manager.apply_faction_effects(user_id, "immigration_riot")
@@ -1707,11 +1657,15 @@ Return ONLY valid JSON."""
         self.db.log_event(user_id, "immigration", "Immigration Opened",
                           f"Gained {gained} citizens, lost {happiness_loss} happiness. Riot: {riot_triggered}")
 
-        embed = create_embed("🛂 Immigration Open!", f"{gained} new citizens arrived!", guilded.Color.blue())
+        embed = create_embed("🛂 Immigration Open!",
+                             f"{gained} new citizens arrived!",
+                             guilded.Color.blue())
         embed.add_field(name="👥 Citizens Gained", value=f"+{format_number(gained)}", inline=True)
         embed.add_field(name="😡 Happiness", value=f"-{happiness_loss}", inline=True)
         if riot_triggered:
-            embed.add_field(name="💥 PROTEST RIOT!", value=f"Lost {s_loss} soldiers and {extra_h} more happiness!", inline=False)
+            embed.add_field(name="💥 PROTEST RIOT!",
+                            value=f"Lost {s_loss} soldiers and {extra_h} more happiness!",
+                            inline=False)
             embed.color = guilded.Color.red()
         await ctx.send(embed=embed)
 

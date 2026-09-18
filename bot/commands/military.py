@@ -29,8 +29,93 @@ PLANE_TYPES = {
     "bomber": {"name": "Bomber", "cost_gold": config.MILITARY["plane_costs"]["bomber"]["gold"], "cost_wood": config.MILITARY["plane_costs"]["bomber"]["wood"], "cost_stone": config.MILITARY["plane_costs"]["bomber"]["stone"], "range": 2, "strength": 40, "description": "Long-range heavy bomber."}
 }
 
-TRAINING_LEVELS = [1.0, 1.5, 2.0, 3.0]
-MAX_BOOSTED_SOLDIERS = 300
+# Training tiers — each level upgrades what a boosted soldier counts as.
+# Level 4 = SUPER ELITE — 1 soldier fights as 100.
+TRAINING_LEVELS = [1.0, 3.0, 10.0, 30.0, 100.0]
+TRAINING_LEVEL_NAMES = [
+    "Recruit",
+    "Regular",
+    "Veteran",
+    "Elite",
+    "SUPER ELITE",
+]
+MAX_TRAINING_LEVEL = len(TRAINING_LEVELS) - 1  # 4
+MAX_BOOSTED_SOLDIERS = 1000  # how many soldiers can benefit from training multiplier
+
+# Spy buy cost
+SPY_BUY_COST = 50
+
+
+# =====================================================================
+# STEALTH QUESTION VIEW
+# =====================================================================
+class StealthQuestionView(guilded.ui.View):
+    """4-button rapid-fire math challenge. Correct answer within 5s = success."""
+
+    def __init__(self, user_id: int, question: str, correct: int, choices: List[int], timeout: float = 5.0):
+        super().__init__(timeout=timeout)
+        self.user_id = user_id
+        self.correct = correct
+        self.answered = False
+        self.correct_answer = None
+        # Shuffle button order so the right answer isn't always last
+        random.shuffle(choices)
+        for choice in choices:
+            button = guilded.ui.Button(label=str(choice), style=guilded.ButtonStyle.primary)
+            button.callback = self._make_callback(choice)
+            self.add_item(button)
+
+    def _make_callback(self, choice):
+        async def callback(interaction: guilded.Interaction):
+            if interaction.user.id != self.user_id:
+                await interaction.response.send_message("This isn't your mission!", ephemeral=True)
+                return
+            if self.answered:
+                await interaction.response.send_message("Already answered!", ephemeral=True)
+                return
+            self.answered = True
+            self.correct_answer = (choice == self.correct)
+            # Disable all buttons so no one else can click
+            for item in self.children:
+                item.disabled = True
+            try:
+                await interaction.response.edit_message(view=self)
+            except Exception:
+                pass
+            self.stop()
+        return callback
+
+
+def _generate_stealth_question() -> Tuple[str, int, List[int]]:
+    """Return (question_text, correct_answer, four_choices)."""
+    kind = random.choice(["add", "sub", "mul"])
+    if kind == "add":
+        a = random.randint(50, 250)
+        b = random.randint(30, 200)
+        question = f"What is {a} + {b}?"
+        correct = a + b
+    elif kind == "sub":
+        a = random.randint(150, 400)
+        b = random.randint(30, 140)
+        question = f"What is {a} - {b}?"
+        correct = a - b
+    else:
+        a = random.randint(6, 15)
+        b = random.randint(4, 12)
+        question = f"What is {a} × {b}?"
+        correct = a * b
+
+    # Build 3 wrong answers near the right one
+    choices = {correct}
+    while len(choices) < 4:
+        offset = random.randint(-20, 20)
+        if offset == 0:
+            continue
+        candidate = correct + offset
+        if candidate <= 0:
+            continue
+        choices.add(candidate)
+    return question, correct, list(choices)
 
 
 class MilitaryCommands(commands.Cog):
@@ -151,7 +236,9 @@ class MilitaryCommands(commands.Cog):
         if training is None:
             training = self._get_training(civ['user_id'])
         training_level = training.get("level", 0)
-        multiplier = TRAINING_LEVELS[training_level] if training_level < len(TRAINING_LEVELS) else 1.0
+        if training_level >= len(TRAINING_LEVELS):
+            training_level = len(TRAINING_LEVELS) - 1
+        multiplier = TRAINING_LEVELS[training_level]
 
         soldiers = civ['military']['soldiers']
         boosted_count = min(soldiers, MAX_BOOSTED_SOLDIERS)
@@ -272,37 +359,42 @@ class MilitaryCommands(commands.Cog):
             return False
 
     async def check_civil_war_and_proceed(self, ctx, user_id: str) -> bool:
+        """Silent civil-war gate. Returns True if the action may proceed.
+
+        Keeps the big CIVIL WAR ERUPTS embed + AI news. No spam warnings.
+        """
         try:
             result = self.civ_manager.check_civil_war_risk(user_id)
+
+            # Already in a war → silently block
+            state_active = self.civ_manager.get_civil_war_state(user_id)
+            if state_active and not result:
+                return False
+
             if not result:
-                state = self.civ_manager.get_civil_war_state(user_id)
-                if state:
-                    embed = create_embed(
-                        "💥 CIVIL WAR IN PROGRESS",
-                        "You cannot take military actions while your nation is at war with itself.\n"
-                        "Use `.reclaim <territory>` to fight the rebels.",
-                        guilded.Color.red()
-                    )
-                    await ctx.send(embed=embed)
-                    return False
                 return True
 
-            if result.get("single_territory"):
+            if result.get("single_territory") or not result.get("state"):
                 return True
 
             state = result.get("state", {})
+            civ = self.civ_manager.get_civilization(user_id)
+            civ_name = civ['name'] if civ else "your nation"
             cause = state.get("cause", "people")
             cause_label = {
                 "military": "the armed forces",
                 "merchant": "the merchant guilds",
                 "people": "the common people",
             }.get(cause, "rebels")
+            rebel_list = ", ".join(state.get("rebel_territories", [])[:5])
+
             embed = create_embed(
                 "💥 CIVIL WAR ERUPTS!",
                 f"**Rebellion by {cause_label}!**\n"
-                f"Rebels have seized **{len(state.get('rebel_territories', []))} territories**.\n"
-                f"Your military is in disarray — the action has been cancelled.\n\n"
-                f"Use `.reclaim <territory>` to fight back. **+30% offensive bonus** applies.",
+                f"Rebels have seized **{len(state.get('rebel_territories', []))} territories**: {rebel_list}\n"
+                f"Rebel strength: **{state.get('rebel_strength')}** troops\n\n"
+                f"Use `.reclaim <territory>` to fight them back.\n"
+                f"You have a **+30% offensive bonus** when reclaiming land.",
                 guilded.Color.red()
             )
             await ctx.send(embed=embed)
@@ -366,7 +458,6 @@ class MilitaryCommands(commands.Cog):
             self._start_cooldown(user_id, 'train', cooldown_seconds)
 
             training_modifier = self.civ_manager.get_ideology_modifier(user_id, "soldier_training_speed")
-            # Faction blessing/bane on training
             training_modifier *= self.civ_manager.get_faction_blessing_modifier(user_id, "soldier_training_speed")
             training_modifier *= self.civ_manager.get_faction_bane_modifier(user_id, "soldier_training_speed")
 
@@ -400,6 +491,63 @@ class MilitaryCommands(commands.Cog):
             await ctx.send(embed=embed)
         except Exception as e:
             logger.error(f"Error in train command: {e}", exc_info=True)
+
+    # =================================================================
+    # TRAIN BOOST — now up to Level 4 (SUPER ELITE)
+    # =================================================================
+    @commands.command(name='trainboost')
+    async def train_boost(self, ctx, amount: int = 1):
+        try:
+            user_id = str(ctx.author.id)
+            civ = self.civ_manager.get_civilization(user_id)
+            if not civ:
+                await ctx.send("❌ You need to start a civilization first! Use `.start`")
+                return
+
+            training = self._get_training(user_id)
+            current_level = training.get("level", 0)
+            if current_level >= MAX_TRAINING_LEVEL:
+                await ctx.send(f"❌ Training level is already at maximum (**{TRAINING_LEVEL_NAMES[MAX_TRAINING_LEVEL]}**)!")
+                return
+            if amount < 1:
+                await ctx.send("❌ Amount must be at least 1!")
+                return
+
+            new_level = min(current_level + amount, MAX_TRAINING_LEVEL)
+            actual_increase = new_level - current_level
+            if actual_increase == 0:
+                await ctx.send("❌ Already at max level!")
+                return
+
+            # Cost scales with target level
+            base_cost = config.MILITARY['tech_upgrade_cost']
+            multiplier = [1, 5, 25, 100, 500][new_level]
+            cost = base_cost * multiplier * actual_increase
+
+            if not self.civ_manager.can_afford(user_id, {"gold": cost}):
+                await ctx.send(f"❌ Not enough gold! Need {format_number(cost)} gold.")
+                return
+
+            self.civ_manager.spend_resources(user_id, {"gold": cost})
+            self._update_training(user_id, {"level": actual_increase})
+
+            old_name = TRAINING_LEVEL_NAMES[current_level]
+            new_name = TRAINING_LEVEL_NAMES[new_level]
+            old_mult = TRAINING_LEVELS[current_level]
+            new_mult = TRAINING_LEVELS[new_level]
+
+            embed = create_embed("⚔️ Training Level Up!",
+                                 f"Training level: **{current_level} ({old_name})** → **{new_level} ({new_name})**\n"
+                                 f"Multiplier: **{old_mult}x** → **{new_mult}x** (up to {MAX_BOOSTED_SOLDIERS} soldiers)",
+                                 guilded.Color.gold())
+            embed.add_field(name="Cost", value=f"🪙 {format_number(cost)} Gold", inline=True)
+            if new_level == MAX_TRAINING_LEVEL:
+                embed.add_field(name="🏆 SUPER ELITE UNLOCKED",
+                                value="1 of your elite soldiers now fights as **100 soldiers** on the battlefield.",
+                                inline=False)
+            await ctx.send(embed=embed)
+        except Exception as e:
+            logger.error(f"Error in trainboost: {e}", exc_info=True)
 
     # =================================================================
     # DECLARE
@@ -448,7 +596,7 @@ class MilitaryCommands(commands.Cog):
             logger.error(f"Error declaring war: {e}", exc_info=True)
 
     # =================================================================
-    # ATTACK — with lucky strike
+    # ATTACK
     # =================================================================
     @commands.command(name='attack')
     async def attack_civilization(self, ctx, target: guilded.Member = None, level: int = 5):
@@ -527,7 +675,6 @@ class MilitaryCommands(commands.Cog):
             final_attacker = attacker_strength * attacker_roll
             final_defender = defender_strength * defender_roll
 
-            # --- LUCKY STRIKE: guaranteed critical ---
             lucky_used = False
             if self.civ_manager.consume_lucky_strike(user_id):
                 final_attacker *= 2.0
@@ -554,7 +701,7 @@ class MilitaryCommands(commands.Cog):
             if final_attacker > final_defender:
                 victory_margin = final_attacker / max(1, final_defender)
                 if lucky_used:
-                    victory_margin *= 2.0  # double spoils on lucky hit
+                    victory_margin *= 2.0
                 await self._process_attack_victory(ctx, user_id, target_id, civ, target_civ, victory_margin, level, lucky_used)
                 self.civ_manager.apply_faction_effects(user_id, "attack")
                 self.civ_manager.apply_faction_effects(user_id, "battle_victory")
@@ -658,7 +805,7 @@ class MilitaryCommands(commands.Cog):
             logger.error(f"Error processing attack defeat: {e}", exc_info=True)
 
     # =================================================================
-    # STEALTH BATTLE
+    # STEALTH BATTLE — reworked with math challenge
     # =================================================================
     @commands.command(name='stealthbattle')
     async def stealth_battle(self, ctx, target: guilded.Member = None):
@@ -673,7 +820,9 @@ class MilitaryCommands(commands.Cog):
                 return
 
             if not target:
-                await ctx.send("🕵️ **Stealth Battle**\nUsage: `.stealthbattle <user>`\nUses spies instead of soldiers.")
+                await ctx.send("🕵️ **Stealth Battle**\nUsage: `.stealthbattle <user>`\n"
+                               "**Elite operation:** You will be asked a security question.\n"
+                               "Answer within **5 seconds** by clicking the right button.")
                 return
 
             if not await self.check_civil_war_and_proceed(ctx, user_id):
@@ -692,6 +841,50 @@ class MilitaryCommands(commands.Cog):
                 await ctx.send("❌ Target user doesn't have a civilization!")
                 return
 
+            # ---------- SECURITY CHECKPOINT ----------
+            question, correct, choices = _generate_stealth_question()
+
+            intro_embed = create_embed(
+                "🕵️ **INFILTRATION IN PROGRESS**",
+                f"Your operatives are past the perimeter... but a **security checkpoint** blocks the vault.\n\n"
+                f"**Question:** {question}\n\n"
+                f"⏱️ Click the correct answer within **5 seconds**.\n"
+                f"Wrong answer or timeout = mission fails and spies are captured.",
+                guilded.Color.dark_blue()
+            )
+
+            view = StealthQuestionView(ctx.author.id, question, correct, choices, timeout=5.0)
+            msg = await ctx.send(embed=intro_embed, view=view)
+
+            # Wait for the view to finish (timeout OR user click)
+            await view.wait()
+
+            # ---------- VERDICT ----------
+            if view.correct_answer is not True:
+                # Wrong, timeout, or unanswered
+                spy_losses = random.randint(1, 2)
+                self.civ_manager.update_military(user_id, {"spies": -spy_losses})
+                self.civ_manager.apply_faction_effects(user_id, "stealthbattle")
+                self._start_cooldown(user_id, 'stealthbattle', cooldown_seconds)
+
+                if view.correct_answer is False:
+                    reason = "❌ **Wrong answer.** The guards saw through your cover."
+                else:
+                    reason = "⏱️ **Too slow.** The checkpoint timer expired."
+                fail_embed = create_embed(
+                    "🕵️ Mission Failed",
+                    f"{reason}\n\nLost **{spy_losses}** spies in the escape.",
+                    guilded.Color.red()
+                )
+                fail_embed.add_field(
+                    name="Correct Answer",
+                    value=f"`{question}` → **{correct}**",
+                    inline=False
+                )
+                await ctx.send(embed=fail_embed)
+                return
+
+            # Correct answer → proceed to the normal spy-vs-spy resolution
             self._start_cooldown(user_id, 'stealthbattle', cooldown_seconds)
 
             tech = self._get_military_tech(user_id)
@@ -699,8 +892,8 @@ class MilitaryCommands(commands.Cog):
             attacker_spy_power = civ['military']['spies'] * tech.get("ground_tech", 1)
             defender_spy_power = target_civ['military']['spies'] * target_tech.get("ground_tech", 1)
 
-            success_chance = 0.6 + (attacker_spy_power - defender_spy_power) / 100
-            success_chance = max(0.2, min(0.9, success_chance))
+            success_chance = 0.7 + (attacker_spy_power - defender_spy_power) / 100
+            success_chance = max(0.35, min(0.95, success_chance))
 
             if civ.get('ideology') == 'anarchy':
                 success_chance *= 0.8
@@ -742,6 +935,7 @@ class MilitaryCommands(commands.Cog):
                 self.civ_manager.apply_faction_effects(user_id, "stealthbattle")
 
                 embed = create_embed("🕵️ Stealth Operation Success!", result_text, guilded.Color.purple())
+                embed.add_field(name="✅ Security Bypassed", value=f"You answered `{correct}` correctly.", inline=False)
                 if spy_losses > 0:
                     embed.add_field(name="Casualties", value=f"Lost {spy_losses} spies", inline=False)
                 await ctx.send(embed=embed)
@@ -752,7 +946,8 @@ class MilitaryCommands(commands.Cog):
             else:
                 spy_losses = random.randint(1, 4)
                 self.civ_manager.update_military(user_id, {"spies": -spy_losses})
-                embed = create_embed("🕵️ Stealth Operation Failed!", f"Detected! Lost {spy_losses} spies.", guilded.Color.red())
+                embed = create_embed("🕵️ Stealth Operation Failed!", f"Detected on the way out! Lost {spy_losses} spies.", guilded.Color.red())
+                embed.add_field(name="✅ Security Bypassed", value=f"You answered `{correct}` correctly.", inline=False)
                 await ctx.send(embed=embed)
                 try:
                     await ctx.send(f"{target.mention} 🔍 Your network detected and thwarted a stealth attack from **{civ['name']}**!")
@@ -914,7 +1109,7 @@ class MilitaryCommands(commands.Cog):
             logger.error(f"Error in find: {e}", exc_info=True)
 
     # =================================================================
-    # PEACE (note: if diplomacy.py also registers `peace`, rename one)
+    # PEACE
     # =================================================================
     @commands.command(name='peace')
     async def make_peace(self, ctx, target: guilded.Member = None):
@@ -1491,50 +1686,6 @@ class MilitaryCommands(commands.Cog):
             logger.error(f"Error in tech: {e}", exc_info=True)
 
     # =================================================================
-    # TRAINBOOST
-    # =================================================================
-    @commands.command(name='trainboost')
-    async def train_boost(self, ctx, amount: int = 1):
-        try:
-            user_id = str(ctx.author.id)
-            civ = self.civ_manager.get_civilization(user_id)
-            if not civ:
-                await ctx.send("❌ You need to start a civilization first! Use `.start`")
-                return
-
-            training = self._get_training(user_id)
-            current_level = training.get("level", 0)
-            if current_level >= 3:
-                await ctx.send("❌ Training level is already at maximum (level 3)!")
-                return
-            if amount < 1:
-                await ctx.send("❌ Amount must be at least 1!")
-                return
-
-            new_level = min(current_level + amount, 3)
-            actual_increase = new_level - current_level
-            if actual_increase == 0:
-                await ctx.send("❌ Already at max level!")
-                return
-
-            cost = config.MILITARY['tech_upgrade_cost'] * actual_increase
-            if not self.civ_manager.can_afford(user_id, {"gold": cost}):
-                await ctx.send(f"❌ Not enough gold! Need {format_number(cost)} gold.")
-                return
-
-            self.civ_manager.spend_resources(user_id, {"gold": cost})
-            self._update_training(user_id, {"level": actual_increase})
-
-            embed = create_embed("⚔️ Training Level Up!",
-                                 f"Training level increased from **{current_level}** to **{new_level}**!\n"
-                                 f"Multiplier: {TRAINING_LEVELS[current_level]}x → {TRAINING_LEVELS[new_level]}x (up to {MAX_BOOSTED_SOLDIERS} soldiers)",
-                                 guilded.Color.gold())
-            embed.add_field(name="Cost", value=f"🪙 {format_number(cost)} Gold", inline=True)
-            await ctx.send(embed=embed)
-        except Exception as e:
-            logger.error(f"Error in trainboost: {e}", exc_info=True)
-
-    # =================================================================
     # NAVY / AIRFORCE DISPLAY
     # =================================================================
     @commands.command(name='navy')
@@ -1652,7 +1803,6 @@ class MilitaryCommands(commands.Cog):
             att_final = attacker_strength * att_roll
             def_final = defender_strength * def_roll
 
-            # Lucky strike can apply here too
             lucky_used = self.civ_manager.consume_lucky_strike(user_id)
             if lucky_used:
                 att_final *= 2.0
@@ -1894,6 +2044,39 @@ class MilitaryCommands(commands.Cog):
             self.db.log_event(user_id, "naval_blockade", "Naval Blockade", f"Blockaded {target_civ['name']}")
         except Exception as e:
             logger.error(f"Error in navalblockade: {e}", exc_info=True)
+
+    # =================================================================
+    # BUY SPIES — new command
+    # =================================================================
+    @commands.command(name='buyspys', aliases=['buyspies'])
+    async def buy_spies(self, ctx, amount: int = None):
+        """Buy spies with gold. Cheap and instant."""
+        if amount is None or amount < 1:
+            await ctx.send(f"🕵️ **Buy Spies**\nUsage: `.buyspys <amount>`\n"
+                           f"Cost: **{SPY_BUY_COST} gold** each.")
+            return
+        user_id = str(ctx.author.id)
+        civ = self.civ_manager.get_civilization(user_id)
+        if not civ:
+            await ctx.send("❌ You need a civilization first!")
+            return
+        cost = amount * SPY_BUY_COST
+        if not self.civ_manager.can_afford(user_id, {"gold": cost}):
+            await ctx.send(f"❌ Need {format_number(cost)} gold!")
+            return
+        self.civ_manager.spend_resources(user_id, {"gold": cost})
+        self.civ_manager.update_military(user_id, {"spies": amount})
+        # Buying spies isn't very honorable — small People hit
+        self.civ_manager.apply_faction_effects(user_id, "train_spies")
+        new_total = civ['military']['spies'] + amount
+        embed = create_embed(
+            "🕵️ Spies Recruited",
+            f"Bought **{format_number(amount)}** spies for **{format_number(cost)}** gold.",
+            guilded.Color.dark_purple()
+        )
+        embed.add_field(name="Total Spies", value=f"🕵️ {format_number(new_total)}", inline=True)
+        embed.add_field(name="Cost/Spy", value=f"🪙 {SPY_BUY_COST}", inline=True)
+        await ctx.send(embed=embed)
 
 
 async def setup(bot):

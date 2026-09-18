@@ -306,10 +306,10 @@ class CivilizationManager:
                         return None
                 except (ValueError, TypeError):
                     pass
-
+                    
             owned = self.db.get_player_territories(user_id)
             if len(owned) < 2:
-                return {"single_territory": True, "warning": True}
+                return None  # was: {"single_territory": True, "warning": True}
 
             factions = civ.get('factions', {"military": 50, "merchant": 50, "people": 50})
 

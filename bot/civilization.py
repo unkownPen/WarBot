@@ -141,14 +141,12 @@ class CivilizationManager:
     # FACTIONS
     # =================================================================
     def get_faction(self, user_id: str, faction: str) -> int:
-        """Return the current value of a single faction (0-100)."""
         civ = self.get_civilization(user_id)
         if not civ:
             return 50
         return int(civ.get('factions', {}).get(faction, 50))
 
     def update_faction(self, user_id: str, faction: str, delta: int) -> bool:
-        """Apply a delta to one faction, clamped 0-100. Invalidates cache."""
         try:
             civ = self.get_civilization(user_id)
             if not civ:
@@ -165,7 +163,6 @@ class CivilizationManager:
             return False
 
     def apply_faction_effects(self, user_id: str, action: str) -> bool:
-        """Look up an action in FACTION_EFFECTS and apply all deltas."""
         try:
             from bot import config
             deltas = config.FACTION_EFFECTS.get(action)
@@ -185,10 +182,6 @@ class CivilizationManager:
             return False
 
     def get_faction_blessing_modifier(self, user_id: str, action_type: str) -> float:
-        """
-        Returns a multiplier >= 1.0 if a faction is above its blessing
-        threshold and the action matches its blessing key.
-        """
         from bot import config
         civ = self.get_civilization(user_id)
         if not civ:
@@ -204,10 +197,6 @@ class CivilizationManager:
         return mod
 
     def get_faction_bane_modifier(self, user_id: str, action_type: str) -> float:
-        """
-        Returns a multiplier <= 1.0 if a faction is below its danger
-        threshold and the action matches its bane key.
-        """
         from bot import config
         civ = self.get_civilization(user_id)
         if not civ:
@@ -232,7 +221,6 @@ class CivilizationManager:
     # LUCKY STRIKE
     # =================================================================
     def set_lucky_strike(self, user_id: str) -> bool:
-        """Mark that the player's next qualifying action gets a critical success."""
         try:
             civ = self.get_civilization(user_id)
             if not civ:
@@ -257,7 +245,6 @@ class CivilizationManager:
             return False
 
     def consume_lucky_strike(self, user_id: str) -> bool:
-        """Clear the flag and return True if it was set."""
         try:
             civ = self.get_civilization(user_id)
             if not civ:
@@ -275,19 +262,9 @@ class CivilizationManager:
             return False
 
     # =================================================================
-    # CIVIL WAR — FACTION-DRIVEN
+    # CIVIL WAR
     # =================================================================
     def check_civil_war_risk(self, user_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Check if a civil war starts. Returns civil-war context or None.
-
-        Two triggers:
-          1) Any faction <= its danger_threshold (10) → that faction rebels
-          2) Happiness < 50 (legacy path) → generic rebellion
-
-        30-minute per-user cooldown. If the player has only 1 territory,
-        returns None (cannot split a single territory).
-        """
         try:
             from bot import config
             civ = self.get_civilization(user_id)
@@ -309,18 +286,18 @@ class CivilizationManager:
 
             owned = self.db.get_player_territories(user_id)
             if len(owned) < 2:
-                return None  # Single territory — cannot split, silent
+                return None  # silent — single territory can't split
 
             factions = civ.get('factions', {"military": 50, "merchant": 50, "people": 50})
 
-            # --- Trigger 1: faction in open revolt (100% guaranteed) ---
+            # Trigger 1: any faction in open revolt
             for fkey, meta in config.FACTIONS.items():
                 val = factions.get(fkey, 50)
                 if val <= meta.get("danger_threshold", 10):
                     logger.info(f"Faction civil war: {fkey} = {val} for {user_id}")
                     return self.trigger_civil_war(user_id, cause=fkey)
 
-            # --- Trigger 2: happiness-based legacy path ---
+            # Trigger 2: happiness-based
             happiness = civ['population']['happiness']
             if happiness < 50:
                 chance = min(40.0, (50 - happiness) * 0.8)
@@ -338,12 +315,6 @@ class CivilizationManager:
             return None
 
     def trigger_civil_war(self, user_id: str, cause: str = "people") -> Optional[Dict[str, Any]]:
-        """
-        Start a civil war: split territories into loyalist/rebel halves.
-
-        `cause` is one of the faction keys ("military", "merchant", "people").
-        Different causes change rebel strength and behaviour.
-        """
         try:
             from bot import config
             civ = self.get_civilization(user_id)
@@ -365,15 +336,11 @@ class CivilizationManager:
             soldiers = civ['military']['soldiers']
             gold = civ['resources']['gold']
 
-            # Rebel strength depends on the faction that rebelled
             if cause == "military":
-                # Soldier defection — biggest rebel army
                 rebel_strength = max(15, int(soldiers * random.uniform(0.50, 0.70)))
             elif cause == "merchant":
-                # Hired mercenaries — moderate army, big treasury
                 rebel_strength = max(10, int(soldiers * random.uniform(0.30, 0.45)))
-            else:  # people
-                # Mass uprising — smaller professional army but many volunteers
+            else:
                 rebel_strength = max(8, int(soldiers * random.uniform(0.35, 0.50)))
 
             cw_state = {
@@ -430,7 +397,6 @@ class CivilizationManager:
         return cw if cw.get('active') else None
 
     def fight_civil_war_battle(self, user_id: str, territory: str = None) -> Dict[str, Any]:
-        """Player attacks a rebel-held territory. 30% offensive boost applies."""
         try:
             civ = self.get_civilization(user_id)
             if not civ:
@@ -523,7 +489,6 @@ class CivilizationManager:
             return {"error": "internal", "detail": str(e)}
 
     def end_civil_war(self, user_id: str, victory: bool) -> Dict[str, Any]:
-        """End the civil war. On victory, restore all rebel territories and heal the rebelling faction."""
         try:
             civ = self.get_civilization(user_id)
             if not civ:
@@ -539,7 +504,6 @@ class CivilizationManager:
                 for t in cw.get('rebel_territories', []):
                     self.db.conquer_territory(user_id, None, t)
                 self.update_population(user_id, {"happiness": 20})
-                # Restore the rebelling faction partway back up
                 factions = civ.get('factions', {"military": 50, "merchant": 50, "people": 50})
                 factions[cause] = max(factions.get(cause, 50), 40)
                 self.db.update_civilization(user_id, {"factions": factions})
@@ -798,13 +762,9 @@ class CivilizationManager:
             return False
 
     # =================================================================
-    # INCOME — THE CLIMB
+    # INCOME
     # =================================================================
     def calculate_resource_income(self, user_id: str) -> Dict[str, int]:
-        """
-        Passive income per tick. Uses POWER_CURVE constants so the
-        curve is a slow climb, not an exponential spike.
-        """
         try:
             from bot import config
             civ = self.get_civilization(user_id)
@@ -819,7 +779,6 @@ class CivilizationManager:
             employment_rate = self.get_employment_rate(user_id)
             employment_modifier = employment_rate / 100
 
-            # ---- Region modifier ----
             region_modifier = 1.0
             region = civ.get('region')
             if region and region in self.region_modifiers:
@@ -828,18 +787,15 @@ class CivilizationManager:
                     if rb.get(k):
                         region_modifier *= rb[k]
 
-            # ---- Territory modifier (capped at 1.5x, not 3.0x) ----
             territory_modifier = get_territory_modifier(territory['land_size'])
 
             base_gold = int(population['citizens'] * 0.1 * territory_modifier * employment_modifier)
             base_food = int(population['citizens'] * 0.2 * employment_modifier)
 
-            # ---- Tech multiplier ----
             tech_level = military['tech_level']
             tech_per_level = config.POWER_CURVE.get("tech_gold_per_level", 0.05)
             base_gold = int(base_gold * (1 + tech_level * tech_per_level))
 
-            # ---- Ideology modifiers ----
             resource_modifier = 1.0
             if ideology == 'communism':
                 resource_modifier *= self.ideology_modifiers['communism']['citizen_productivity']
@@ -862,7 +818,6 @@ class CivilizationManager:
             resource_modifier *= (1 + bonuses.get('resource_production', 0) / 100)
             resource_modifier *= region_modifier
 
-            # ---- Faction blessings/banes ----
             gold_bless = self.get_faction_blessing_modifier(user_id, "gold_income_mult")
             gold_bane = self.get_faction_bane_modifier(user_id, "gold_income_mult")
             inc_bless = self.get_faction_blessing_modifier(user_id, "resource_income_mult")
@@ -870,7 +825,7 @@ class CivilizationManager:
             base_gold = int(base_gold * gold_bless * gold_bane)
             resource_modifier *= inc_bless * inc_bane
 
-            # ---- Sanction pressure ----
+            # Sanction pressure
             try:
                 now = datetime.utcnow()
                 for s in (civ.get('received_sanctions') or []):
@@ -880,7 +835,6 @@ class CivilizationManager:
             except Exception:
                 pass
 
-            # ---- Happiness effect (misery scales down production) ----
             happiness = population.get('happiness', 50)
             if happiness < 0:
                 misery = max(0.0, 1 + (happiness / 100.0))
@@ -917,7 +871,7 @@ class CivilizationManager:
             return {}
 
     # =================================================================
-    # HAPPINESS EFFECTS — includes faction drift + sanction pressure
+    # HAPPINESS EFFECTS — faction drift removed
     # =================================================================
     def apply_happiness_effects(self, user_id: str):
         try:
@@ -942,7 +896,7 @@ class CivilizationManager:
                     happiness_modifier += ih
             happiness = int(happiness * happiness_modifier)
 
-            # ---- Sanction pressure: -X happiness per tick while sanctioned ----
+            # Sanction pressure
             try:
                 from bot import config as _cfg
                 now = datetime.utcnow()
@@ -953,21 +907,7 @@ class CivilizationManager:
             except Exception:
                 pass
 
-            # ---- Faction drift: unused factions decay toward 50 ----
-            try:
-                factions = civ.get('factions', {"military": 50, "merchant": 50, "people": 50})
-                changed = False
-                for fkey in ("military", "merchant", "people"):
-                    val = factions.get(fkey, 50)
-                    if val > 50:
-                        # decay 1 per tick toward 50
-                        factions[fkey] = max(50, val - 1)
-                        changed = True
-                if changed:
-                    self.db.update_civilization(user_id, {"factions": factions})
-                    self._invalidate_civ(user_id)
-            except Exception:
-                pass
+            # NOTE: Faction drift removed — factions only move via explicit actions.
 
             if happiness < 0:
                 severity = abs(happiness)
@@ -1076,7 +1016,6 @@ class CivilizationManager:
             return 0.0
 
     def calculate_total_modifier(self, user_id: str, action_type: str) -> float:
-        """Combines ideology + region + name bonus + faction blessings/banes."""
         try:
             base = 1.0
             ideo = self.get_ideology_modifier(user_id, action_type)
@@ -1089,7 +1028,6 @@ class CivilizationManager:
             if isinstance(name_bonus, str):
                 name_bonus = float(name_bonus)
 
-            # Faction modifiers for combat / training / gold
             bless = self.get_faction_blessing_modifier(user_id, action_type)
             bane = self.get_faction_bane_modifier(user_id, action_type)
 
@@ -1140,7 +1078,6 @@ class CivilizationManager:
             territory_power = territory['land_size'] // 500
             happiness_power = max(0, population['happiness'])
 
-            # Faction average contributes to overall stability score
             faction_power = int(sum(factions.values()) / 3)
 
             defense_bonus = bonuses.get('defense_strength', 0)

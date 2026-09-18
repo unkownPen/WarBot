@@ -172,6 +172,7 @@ COOLDOWNS = {
 
     # Corporations
     "corp": 0, "corp_build": 0,
+    "corp_leaderboard": 0, "corp_takeover": 0,
 }
 
 CAPS = {
@@ -708,7 +709,7 @@ MAP_RENDER = {
 }
 
 # ================================================================
-# CORPORATIONS
+# CORPORATIONS — CORE
 # ================================================================
 INDUSTRIES = {
     "agriculture": {
@@ -790,4 +791,50 @@ CORP_LIMITS = {
     "marketing_cost_per_point": 1_500,
     "rd_cost_per_point": 5_000,
     "dividend_min": 1_000,
+}
+
+# ================================================================
+# CORPORATIONS — EXTENDED
+# ================================================================
+CORP_LEVEL_REQUIREMENTS = {
+    "base_cost": 100_000,
+    "cost_growth": 1.55,
+    "output_bonus_per_level": 0.05,
+    "employees_per_level": 50,
+    "assets_per_level": 5,
+    "marketing_per_level": 5,
+    "rd_per_level": 5,
+    "branch_slots_per_level": [1, 1, 2, 2, 3, 3, 4, 4, 5, 6],
+}
+
+CORP_RESEARCH_TIERS = {
+    10: {"key": "automation_1", "name": "Automation I",   "desc": "+5% efficiency floor",
+         "bonus": {"efficiency_floor": 5}},
+    30: {"key": "automation_2", "name": "Automation II",  "desc": "+10% production output",
+         "bonus": {"output_mult": 1.10}},
+    50: {"key": "logistics",    "name": "Logistics Network", "desc": "+1 contract slot",
+         "bonus": {"contract_slots": 1}},
+    70: {"key": "synergy",      "name": "Industrial Synergy", "desc": "+15% output",
+         "bonus": {"output_mult": 1.15}},
+    90: {"key": "ai_core",      "name": "AI Core",        "desc": "+25% output, +1 reputation/hr",
+         "bonus": {"output_mult": 1.25, "rep_rate": 1}},
+}
+
+CORP_BRANCH_COST_MULT = 75_000
+
+CORP_CONTRACT_POOL = [
+    {"name": "Grain Shipment",    "resource": "food",     "amount": 500,    "reward_gold": 3_000,  "reward_rep": 3, "hours": 24},
+    {"name": "Timber Delivery",   "resource": "wood",     "amount": 400,    "reward_gold": 3_500,  "reward_rep": 3, "hours": 24},
+    {"name": "Stone Order",       "resource": "stone",    "amount": 600,    "reward_gold": 4_000,  "reward_rep": 3, "hours": 24},
+    {"name": "Military Contract", "resource": "soldiers", "amount": 100,    "reward_gold": 8_000,  "reward_rep": 5, "hours": 36},
+    {"name": "Rush Order",        "resource": "food",     "amount": 1000,   "reward_gold": 7_000,  "reward_rep": 4, "hours": 12},
+    {"name": "Bankroll Deal",     "resource": "gold",     "amount": 15_000, "reward_gold": 20_000, "reward_rep": 6, "hours": 48},
+]
+
+CORP_CONTRACT_SLOT_BASE = 1
+
+CORP_TAKEOVER = {
+    "min_attacker_rep": 80,
+    "cost_per_level": 100_000,
+    "success_rep_ratio": 0.60,
 }

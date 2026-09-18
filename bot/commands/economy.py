@@ -66,10 +66,9 @@ class EconomyCommands(commands.Cog):
                 pass
 
     # =================================================================
-    # SHARED HELPERS (faction / sanction / lucky)
+    # SHARED HELPERS
     # =================================================================
     def _is_sanctioned(self, user_id: str) -> bool:
-        """True if this civ currently has any active received sanction."""
         try:
             civ = self.civ_manager.get_civilization(user_id)
             if not civ:
@@ -90,8 +89,7 @@ class EconomyCommands(commands.Cog):
             logger.error(f"_is_sanctioned error for {user_id}: {e}")
             return False
 
-    def _apply_lucky_strike_gain(self, user_id: str, gains: Dict[str, int]) -> (Dict[str, int], bool):
-        """If lucky strike active, double all resource gains and consume the flag."""
+    def _apply_lucky_strike_gain(self, user_id: str, gains: Dict[str, int]):
         try:
             if not gains:
                 return gains, False
@@ -104,7 +102,6 @@ class EconomyCommands(commands.Cog):
             return gains, False
 
     def _apply_sanction_penalty(self, user_id: str, gains: Dict[str, int]) -> Dict[str, int]:
-        """Reduce gains by 25% if nation is sanctioned."""
         try:
             if not gains:
                 return gains
@@ -116,12 +113,10 @@ class EconomyCommands(commands.Cog):
             return gains
 
     def _tech_mult(self, action_key: str, tech_level: int) -> float:
-        """Return the power-curve tech multiplier for an economy action."""
         per_level = config.POWER_CURVE.get(f"tech_{action_key}_per_level", 0.015)
         return 1 + (tech_level * per_level)
 
     def _faction_mult(self, user_id: str, action_type: str) -> float:
-        """Blessing * bane multiplier for an action."""
         try:
             bless = self.civ_manager.get_faction_blessing_modifier(user_id, action_type)
             bane = self.civ_manager.get_faction_bane_modifier(user_id, action_type)
@@ -153,7 +148,6 @@ class EconomyCommands(commands.Cog):
     def _get_corp_income(self, civ: dict, level: int) -> int:
         tech = civ['military']['tech_level']
         base = level * 500
-        # Power curve: 6% per tech level (was 25%)
         tech_multiplier = 1 + (tech * 0.06)
         if tech < 5:
             return int(base * tech_multiplier / 2)
@@ -162,24 +156,63 @@ class EconomyCommands(commands.Cog):
     async def _investment_bank_loop(self):
         await self.bot.wait_until_ready()
         while not self.bot.is_closed():
-            await asyncio.sleep(3600)
+            await asyncio.sleep(config.BANKING['tick_interval_seconds'])
             try:
                 for civ in self.db.get_all_civilizations():
-                    bank = civ.get('bank', {})
-                    if bank.get('deposits', 0) > 0:
-                        tech = civ['military']['tech_level']
-                        rate = 0.005 + (tech * 0.001)
-                        interest = int(bank['deposits'] * rate)
+                    uid = civ['user_id']
+                    bank = civ.get('bank') or {}
+                    deposits = int(bank.get('deposits', 0))
+                    loan = int(bank.get('loan', 0))
+                    credit = int(bank.get('credit_score', 100))
+                    locked = bank.get('locked_until')
+                    changed = False
+
+                    if locked:
+                        try:
+                            if datetime.fromisoformat(locked) <= datetime.utcnow():
+                                bank['locked_until'] = None
+                                changed = True
+                        except Exception:
+                            pass
+
+                    if deposits > 0:
+                        interest = int(deposits * config.BANKING['deposit_rate'])
                         if interest > 0:
-                            bank['deposits'] += interest
-                            bank['last_interest'] = datetime.utcnow().isoformat()
-                            self.db.update_civilization(civ['user_id'], {"bank": bank})
-                            logger.info(f"Investment bank paid {interest} interest to {civ['user_id']}")
+                            bank['deposits'] = deposits + interest
+                            changed = True
+
+                    if loan > 0:
+                        bank['loan'] = int(loan * (1 + config.BANKING['loan_rate']))
+                        changed = True
+                        opened = bank.get('loan_opened_at')
+                        if opened:
+                            try:
+                                age_days = (datetime.utcnow() - datetime.fromisoformat(opened)).days
+                                if age_days >= config.BANKING['default_days']:
+                                    bank['deposits'] = 0
+                                    bank['loan'] = 0
+                                    bank['loan_opened_at'] = None
+                                    bank['credit_score'] = max(0, credit - 50)
+                                    bank['locked_until'] = (
+                                        datetime.utcnow() +
+                                        timedelta(days=config.BANKING['bank_ban_days'])
+                                    ).isoformat()
+                                    changed = True
+                                    self.db.log_event(uid, "bank_default", "Bank Default",
+                                                      f"Loan unpaid {age_days}d. Deposits seized, "
+                                                      f"bank locked {config.BANKING['bank_ban_days']}d.")
+                                    self.civ_manager.apply_faction_effects(uid, "bank_default")
+                            except Exception:
+                                pass
+
+                    if changed:
+                        self.db.update_civilization(uid, {"bank": bank})
+                        self.civ_manager._invalidate_civ(uid)
             except Exception as e:
-                logger.error(f"Investment bank loop error: {e}")
+                logger.error(f"Bank loop error: {e}")
 
     # =================================================================
-    # AI MEGAPROJECT EVALUATOR (unchanged)
+    # AI MEGAPROJECT EVALUATOR
     # =================================================================
     async def _ai_evaluate_megaproject(self, description: str, civ: dict) -> Optional[Dict[str, Any]]:
         tech_level = civ['military']['tech_level']
@@ -220,24 +253,32 @@ Return ONLY valid JSON."""
             return None
 
     # =================================================================
-    # CIVIL WAR HANDLER (unchanged from Wave 1 output)
+    # CIVIL WAR HANDLER
     # =================================================================
     async def check_civil_war_and_proceed(self, ctx, user_id: str) -> bool:
+        """Returns True if the action may proceed.
+
+        - No civil war at all → allow.
+        - Single territory (can't split) → allow silently.
+        - Civil war just triggered → post the CIVIL WAR ERUPTS embed + AI news, block.
+        - Civil war already active → block silently.
+        """
         try:
             result = self.civ_manager.check_civil_war_risk(user_id)
+
+            # Already in a war? Block silently.
+            state_active = self.civ_manager.get_civil_war_state(user_id)
+            if state_active and not result:
+                return False
+
             if not result:
                 return True
 
-            if result.get("single_territory"):
-                embed = create_embed(
-                    "⚠️ Unrest Brewing",
-                    "Your people are deeply unhappy. With only one territory, "
-                    "your nation cannot split — but civil war looms if happiness stays low.",
-                    guilded.Color.orange()
-                )
-                await ctx.send(embed=embed)
+            if result.get("single_territory") or not result.get("state"):
+                # Single-territory civs can't split — allow the action silently.
                 return True
 
+            # Civil war just triggered — post the big red embed
             state = result.get("state", {})
             civ = self.civ_manager.get_civilization(user_id)
             civ_name = civ['name'] if civ else "your nation"
@@ -248,6 +289,7 @@ Return ONLY valid JSON."""
                 "people": "the common people",
             }.get(cause, "rebels")
             rebel_list = ", ".join(state.get("rebel_territories", [])[:5])
+
             embed = create_embed(
                 "💥 CIVIL WAR ERUPTS!",
                 f"**Rebellion by {cause_label}!**\n"
@@ -326,7 +368,6 @@ Return ONLY valid JSON."""
             for resource in gathered:
                 gathered[resource] = int(gathered[resource] * luck_modifier)
 
-        # Faction + sanction + lucky strike
         gathered = self._apply_sanction_penalty(user_id, gathered)
         gathered, lucky_used = self._apply_lucky_strike_gain(user_id, gathered)
         self.civ_manager.update_resources(user_id, gathered)
@@ -671,7 +712,6 @@ Return ONLY valid JSON."""
             await ctx.send("❌ You need to start a civilization first!")
             return
 
-        # --- Sanctions block ---
         if self._is_sanctioned(user_id):
             await ctx.send("🚫 **You are under sanctions.** Global trade is blocked until your sanctions expire.")
             return
@@ -716,7 +756,6 @@ Return ONLY valid JSON."""
             await ctx.send("❌ You need to start a civilization first!")
             return
 
-        # --- Sanctions block ---
         if self._is_sanctioned(user_id):
             await ctx.send("🚫 **You are under sanctions.** Banking is blocked until your sanctions expire.")
             return
@@ -891,6 +930,7 @@ Return ONLY valid JSON."""
         self.civ_manager.spend_resources(user_id, {"gold": 100000})
         corps.append({"level": 1})
         self.db.update_civilization(user_id, {"corporations": corps})
+        self.civ_manager.apply_faction_effects(user_id, "build_corporation")
         await ctx.send("🏢 Corporation built!")
 
     @corporation.command(name='upgrade')
@@ -973,6 +1013,7 @@ Return ONLY valid JSON."""
         for ek, ev in data['effect'].items():
             bonuses[ek] = bonuses.get(ek, 0) + ev
         self.db.update_civilization(user_id, {"megaprojects": built, "bonuses": bonuses})
+        self.civ_manager.apply_faction_effects(user_id, "build_megaproject")
         await ctx.send(embed=create_embed(f"🏗️ {data['name']} Complete!", data['description'], guilded.Color.gold()))
 
     @megaproject.command(name='build')

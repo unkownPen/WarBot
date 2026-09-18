@@ -5,19 +5,15 @@
 # ECONOMY GAINS
 # ================================================================
 ECONOMY = {
-    # Gather — 2.5× buffed
     "gather_base_min": 12, "gather_base_max": 50, "gather_chance": 0.75,
     "gather_employment_coeff": 0.5, "gather_cap": 2000000,
 
-    # Work — gold per citizen doubled
     "work_gold_per_citizen_min": 4, "work_gold_per_citizen_max": 12,
     "work_employment_coeff": 0.5, "work_cap": 5000000,
 
-    # Farm — 2.5× buffed
     "farm_base_min": 25, "farm_base_max": 100, "farm_citizen_divisor": 15,
     "farm_employment_coeff": 0.5, "farm_cap": 2000000,
 
-    # Mine — 3× buffed
     "mine_stone_base_min": 24, "mine_stone_base_max": 90,
     "mine_wood_base_min": 15, "mine_wood_base_max": 60,
     "mine_employment_coeff": 0.5,
@@ -25,31 +21,26 @@ ECONOMY = {
     "mine_bonus_gold_chance": 0.25, "mine_bonus_gold_min": 10,
     "mine_bonus_gold_max": 50, "mine_bonus_gold_cap": 50000,
 
-    # Harvest
     "harvest_base_min": 120, "harvest_base_max": 300,
     "harvest_citizen_divisor": 8, "harvest_happiness_divisor": 3,
     "harvest_employment_coeff": 0.5, "harvest_cap": 5000000,
 
-    # Drill — 2× buffed
     "drill_minerals_min": 50, "drill_minerals_max": 180,
     "drill_employment_coeff": 0.5,
     "drill_gold_cap": 8000000, "drill_stone_cap": 4000000,
     "drill_bonus_gold_chance": 0.2,
     "drill_bonus_gold_min": 150, "drill_bonus_gold_max": 600,
 
-    # Fish
     "fish_food_base_min": 20, "fish_food_base_max": 60,
     "fish_treasure_base_min": 30, "fish_treasure_base_max": 180,
     "fish_employment_coeff": 0.5, "fish_cap": 1000000,
 
-    # Tax — cap doubled
     "tax_base_per_citizen": 1, "tax_employment_coeff": 0.3,
     "tax_happiness_penalty": -5, "tax_fascism_extra_penalty": -8,
     "tax_cap": 600000, "tax_population_loss_threshold": 50,
     "tax_population_loss_chance": 0.35,
     "tax_population_loss_min": 10, "tax_population_loss_max": 30,
 
-    # Raid caravan — 2× buffed
     "raid_gold_min": 400, "raid_gold_max": 1200,
     "raid_food_min": 200, "raid_food_max": 500,
     "raid_wood_min": 100, "raid_wood_max": 300,
@@ -59,7 +50,6 @@ ECONOMY = {
     "raid_bonus_gold_min": 500, "raid_bonus_gold_max": 1500,
     "raid_min_soldiers": 5,
 
-    # Labor
     "labor_gold_min": 400, "labor_gold_max": 1200,
     "labor_food_min": 200, "labor_food_max": 500,
     "labor_wood_min": 200, "labor_wood_max": 500,
@@ -67,7 +57,6 @@ ECONOMY = {
     "labor_employment_coeff": 0.6, "labor_cap": 3000000,
     "labor_happiness_cost": -8, "labor_min_soldiers": 5,
 
-    # Advertise / immigration
     "advertise_citizen_min": 300, "advertise_citizen_max": 900,
     "advertise_employment_coeff": 0.6, "advertise_cap": 20000,
     "advertise_cost": 50,
@@ -80,7 +69,6 @@ ECONOMY = {
     "immigration_riot_soldier_loss_min": 2,
     "immigration_riot_soldier_loss_max": 8,
 
-    # Sell hyper items
     "sell_common_min": 250, "sell_common_max": 600,
     "sell_rare_min": 700, "sell_rare_max": 1500,
     "sell_legendary_min": 1200, "sell_legendary_max": 2500,
@@ -117,71 +105,176 @@ MILITARY = {
 }
 
 # ================================================================
-# COOLDOWNS (in minutes) — LOWERED ACROSS THE BOARD
+# COOLDOWNS (in minutes)
 # ================================================================
 COOLDOWNS = {
-    # Economy — most trimmed to 0-1 min
-    "gather": 0, "work": 0, "farm": 0, "mine": 0, "harvest": 0,
-    "drill": 0, "fish": 0, "labor": 1, "raidcaravan": 1,
-    "tax": 2, "lottery": 0, "invest": 2, "advertise": 3,
-    "immigration": 3, "sell": 0, "festival": 0, "cheer": 0, "cheerup": 3,
-    "buytech": 0, "buysoldiers": 0, "buyspys": 0, "burn": 0, "buycard": 0,
+    # ---- Economy: 1-2 min for spammables, 0 for one-shots ----
+    "gather": 1,
+    "work": 1,
+    "farm": 1,
+    "mine": 1,
+    "harvest": 2,
+    "drill": 2,
+    "fish": 1,
+    "labor": 3,
+    "raidcaravan": 3,
+    "tax": 5,
+    "lottery": 1,
+    "invest": 5,
+    "advertise": 5,
+    "immigration": 5,
+    "sell": 0,
+    "festival": 2,
+    "cheer": 1,
+    "cheerup": 5,
+    "buytech": 0,
+    "buysoldiers": 0,
+    "buyspys": 0,
+    "burn": 0,
+    "buycard": 0,
 
-    # Military — cut roughly in half
-    "train": 1, "find": 0, "attack": 1, "siege": 5,
-    "stealthbattle": 2, "addborder": 3, "removeborder": 1,
-    "rectract": 0, "retrieve": 0, "borderinfo": 0,
-    "buildship": 0, "buildplane": 0, "tech": 0, "trainboost": 0,
-    "navalattack": 1, "airattack": 1, "navalblockade": 10,
+    # ---- Military: 1-5 min for combat, 0 for setup ----
+    "train": 2,
+    "find": 1,
+    "attack": 3,
+    "siege": 10,
+    "stealthbattle": 4,
+    "navalattack": 3,
+    "airattack": 3,
+    "navalblockade": 20,
+    "buildship": 0,
+    "buildplane": 0,
+    "tech": 0,
+    "trainboost": 0,
+    "addborder": 0,
+    "removeborder": 0,
+    "rectract": 0,
+    "retrieve": 0,
+    "borderinfo": 0,
 
-    # Diplomacy
-    "ally": 0, "acceptally": 0, "rejectally": 0, "break": 0,
-    "send": 0, "trade": 0, "accepttrade": 0, "rejecttrade": 0,
-    "mail": 0, "inbox": 0, "coalition": 0,
+    # ---- Diplomacy ----
+    "ally": 0,
+    "acceptally": 0,
+    "rejectally": 0,
+    "break": 0,
+    "send": 0,
+    "trade": 0,
+    "accepttrade": 0,
+    "rejecttrade": 0,
+    "mail": 0,
+    "inbox": 0,
+    "coalition": 0,
+    "sanction": 0,
+    "liftsanction": 0,
+    "sanctions": 0,
 
-    # Store / inventory
-    "blackmarket": 0, "store": 0, "inventory": 0, "market": 0,
+    # ---- Store / inventory ----
+    "blackmarket": 0,
+    "store": 0,
+    "inventory": 0,
+    "market": 0,
 
-    # Territory
-    "expand": 0, "rapidexpansion": 0, "territories": 0, "map": 0,
+    # ---- Territory ----
+    "expand": 0,
+    "rapidexpansion": 0,
+    "territories": 0,
+    "map": 0,
+    "reclaim": 0,
+    "civilwar": 0,
 
-    # Countryballs
-    "openpacks": 0, "evolve": 0, "packs": 0, "activate": 0,
-    "deactivate": 0, "synergies": 0,
+    # ---- Countryballs ----
+    "openpacks": 0,
+    "evolve": 0,
+    "packs": 0,
+    "activate": 0,
+    "deactivate": 0,
+    "synergies": 0,
 
-    # Industrial — halved from 2 to 1
-    "industrial_start": 0, "industrial_status": 0,
-    "industrial_build": 1, "industrial_tech": 1, "industrial_workers": 1,
-    "industrial_cleanup": 1, "industrial_railway": 1, "industrial_transport": 1,
-    "industrial_army": 1, "industrial_policy": 1, "industrial_import": 1,
-    "industrial_export": 1, "industrial_steam": 1, "industrial_mine": 1,
-    "industrial_hospital": 1, "industrial_school": 1, "industrial_law": 1,
-    "industrial_trade": 1, "industrial_aid": 1, "industrial_suppress": 1,
-    "industrial_bribe": 1, "industrial_automate": 1, "industrial_upgrade": 1,
-    "industrial_relief": 1, "industrial_expand": 1,
-    "industrial_banking": 5, "industrial_nationalize": 3, "indushelp": 0,
+    # ---- Industrial ----
+    "industrial_start": 0,
+    "industrial_status": 0,
+    "industrial_build": 2,
+    "industrial_tech": 2,
+    "industrial_workers": 2,
+    "industrial_cleanup": 2,
+    "industrial_railway": 2,
+    "industrial_transport": 2,
+    "industrial_army": 2,
+    "industrial_policy": 2,
+    "industrial_import": 2,
+    "industrial_export": 2,
+    "industrial_steam": 2,
+    "industrial_mine": 2,
+    "industrial_hospital": 2,
+    "industrial_school": 2,
+    "industrial_law": 2,
+    "industrial_trade": 2,
+    "industrial_aid": 2,
+    "industrial_suppress": 2,
+    "industrial_bribe": 2,
+    "industrial_automate": 2,
+    "industrial_upgrade": 2,
+    "industrial_relief": 2,
+    "industrial_expand": 2,
+    "industrial_banking": 10,
+    "industrial_nationalize": 5,
+    "indushelp": 0,
 
-    # Extra economy
-    "extrawork": 2, "extragamble": 0, "extracards": 0, "slots": 0,
-    "blackjack": 0, "job": 0, "arrest": 0, "rob": 0, "code": 0,
-    "darkweb": 0, "extrastore": 0, "extrainventory": 0, "setbalance": 0,
+    # ---- Extra economy ----
+    "extrawork": 5,
+    "extragamble": 1,
+    "extracards": 1,
+    "slots": 1,
+    "blackjack": 1,
+    "job": 1,
+    "arrest": 1,
+    "rob": 1,
+    "code": 0,
+    "darkweb": 0,
+    "extrastore": 1,
+    "extrainventory": 0,
+    "setbalance": 0,
 
-    # Hyperitems — big cooldowns halved
-    "laststand": 30, "luckystrike": 30, "propaganda": 2,
-    "hiremercs": 5, "boosttech": 2, "mintgold": 5, "superharvest": 5,
-    "superspy": 5, "megainvent": 2, "backstab": 90, "bomb": 0,
-    "nuke": 3, "obliterate": 7, "sacrifice": 720,
+    # ---- Hyperitems ----
+    "laststand": 60,
+    "luckystrike": 60,
+    "propaganda": 3,
+    "hiremercs": 10,
+    "boosttech": 5,
+    "mintgold": 10,
+    "superharvest": 10,
+    "superspy": 10,
+    "megainvent": 5,
+    "backstab": 180,
+    "bomb": 1,
+    "nuke": 5,
+    "obliterate": 13,
+    "sacrifice": 1440,
+    "clone": 30,
+    "fakeflag": 30,
+    "glitch_protocol": 30,
 
-    # Groups
-    "corporation": 0, "megaproject": 0, "policy": 0, "policieshelp": 0,
+    # ---- Groups / banking / misc ----
+    "corporation": 0,
+    "megaproject": 0,
+    "policy": 0,
+    "policieshelp": 0,
+    "bank": 0,
+    "bank_deposit": 0,
+    "bank_withdraw": 0,
+    "bank_loan": 0,
+    "bank_repay": 0,
+    "factions": 0,
+    "unionstatus": 0,
 
-    # Sanctions / banking
-    "sanction": 0, "liftsanction": 0, "sanctions": 0, "sanctioned": 0,
-    "bank": 0, "bank_deposit": 0, "bank_withdraw": 0,
-    "bank_loan": 0, "bank_repay": 0,
-
-    # Factions / misc
-    "factions": 0, "unionstatus": 0,
+    # ---- Unions ----
+    "unite": 0,
+    "acceptunite": 0,
+    "declineunite": 0,
+    "leave": 0,
+    "annex": 0,
+    "acceptannex": 0,
+    "declineannex": 0,
 }
 
 CAPS = {
@@ -345,7 +438,7 @@ VICTORY = {
 }
 
 # ================================================================
-# POWER CURVE (THE CLIMB) — buffed slightly, still flat
+# POWER CURVE (THE CLIMB)
 # ================================================================
 POWER_CURVE = {
     "tech_gather_per_level":  0.012,
@@ -404,7 +497,6 @@ FACTIONS = {
 
 FACTION_STARTING = {"military": 50, "merchant": 50, "people": 50}
 
-# Faction deltas per action — DOUBLED, plus new action keys
 FACTION_EFFECTS = {
     # ---- Economy ----
     "gather":        {"people": +2},

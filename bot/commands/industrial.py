@@ -1,9 +1,9 @@
-import functools          # <-- add this
+import functools
 import random
 import json
 import asyncio
 import logging
-from datetime import datetime, timedelta   # <-- also add timedelta, it's used below
+from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 
 import discord
@@ -48,7 +48,7 @@ DEFAULT_STATS = {
 # ---- Cooldown decorator using config ----
 def industrial_cooldown(command_name: str):
     def decorator(func):
-        @functools.wraps(func)                       # <-- THE FIX
+        @functools.wraps(func)
         async def wrapper(self, ctx, *args, **kwargs):
             user_id = str(ctx.author.id)
             minutes = config.COOLDOWNS.get(command_name, 0)
@@ -68,8 +68,9 @@ def industrial_cooldown(command_name: str):
         return wrapper
     return decorator
 
+
 class IndustrialCog(commands.Cog):
-    """Industrial Revolution – permanent micromanagement challenge (once per player)."""
+    """Industrial Revolution – permanent micromanagement challenge."""
 
     def __init__(self, bot):
         self.bot = bot
@@ -87,6 +88,7 @@ class IndustrialCog(commands.Cog):
             return None
         data.setdefault("active", False)
         data.setdefault("completed", False)
+        data.setdefault("completed_once", False)
         data.setdefault("started_at", None)
         data.setdefault("stats", DEFAULT_STATS.copy())
         if data.get("started_at") and isinstance(data["started_at"], str):
@@ -104,8 +106,9 @@ class IndustrialCog(commands.Cog):
         store_data = {
             "active": data["active"],
             "completed": data.get("completed", False),
+            "completed_once": data.get("completed_once", False),
             "started_at": data["started_at"].isoformat() if data.get("started_at") else None,
-            "stats": data["stats"]
+            "stats": data["stats"],
         }
         self.db.set_industrial_revolution(user_id, store_data)
         if data["active"] or data.get("completed", False):
@@ -228,87 +231,127 @@ class IndustrialCog(commands.Cog):
         embed.set_footer(text="Your revolution is getting messy!")
         await ctx.send(embed=embed)
 
+    # ---------- FINISH REVOLUTION ----------
     async def _finish_revolution(self, ctx, user_id: str, data: Dict[str, Any]):
         stats = data["stats"]
         power = stats["industrial_power"]
         data["active"] = False
         data["completed"] = True
+        data["completed_once"] = True  # ← locks .industrial_stop forever
         self._save_revolution(user_id, data)
+
         if power >= 1000:
-            gold_reward = random.randint(5000, 12000)
-            food_reward = random.randint(3000, 7000)
-            stone_reward = random.randint(2000, 5000)
-            wood_reward = random.randint(2000, 5000)
-            citizens_reward = random.randint(200, 600)
-            tech_reward = random.randint(3, 7)
+            # ---- BUFFED REWARDS ----
+            gold_reward = random.randint(50_000, 120_000)
+            food_reward = random.randint(30_000, 70_000)
+            stone_reward = random.randint(20_000, 50_000)
+            wood_reward = random.randint(20_000, 50_000)
+            citizens_reward = random.randint(1_500, 3_500)
+            tech_reward = random.randint(5, 8)
+
+            bonus_item = random.choice([
+                "Lucky Charm", "Propaganda Kit", "Mercenary Contract",
+                "Ancient Scroll", "Gold Mint",
+            ])
+
             self._update_civ_resources(user_id, {
                 "gold": gold_reward,
                 "food": food_reward,
                 "stone": stone_reward,
-                "wood": wood_reward
+                "wood": wood_reward,
             })
             self.civ_manager.update_population(user_id, {"citizens": citizens_reward})
             self.civ_manager.update_military(user_id, {"tech_level": tech_reward})
+            self.civ_manager.add_hyper_item(user_id, bonus_item)
+
             embed = discord.Embed(
                 title="🏭 INDUSTRIAL REVOLUTION COMPLETE!",
-                description="You successfully transformed your nation!",
-                color=discord.Color.gold()
+                description=(
+                    "**You did it, President.** Your nation is no longer just a place — "
+                    "it's a machine. Smoke rises, rivers hum with turbines, and the "
+                    "world will remember your name.\n\n"
+                    "*The future arrived on schedule.*"
+                ),
+                color=discord.Color.gold(),
             )
             embed.add_field(
-                name="Rewards",
-                value=(
-                    f"🪙 {format_number(gold_reward)} Gold\n"
-                    f"🌾 {format_number(food_reward)} Food\n"
-                    f"🪨 {format_number(stone_reward)} Stone\n"
-                    f"🪵 {format_number(wood_reward)} Wood\n"
-                    f"👤 +{format_number(citizens_reward)} Citizens\n"
-                    f"🔬 +{tech_reward} Tech Levels"
-                ),
-                inline=False
+                name="💰 Treasury",
+                value=(f"🪙 **{format_number(gold_reward)}** Gold\n"
+                       f"🌾 **{format_number(food_reward)}** Food\n"
+                       f"🪨 **{format_number(stone_reward)}** Stone\n"
+                       f"🪵 **{format_number(wood_reward)}** Wood"),
+                inline=True,
             )
+            embed.add_field(
+                name="👥 Nation",
+                value=(f"👤 +**{format_number(citizens_reward)}** Citizens\n"
+                       f"🔬 +**{tech_reward}** Tech Levels\n"
+                       f"🎁 **{bonus_item}**"),
+                inline=True,
+            )
+            embed.set_footer(text="Locked in. .industrial_stop is now permanently unavailable to you.")
             await ctx.send(embed=embed)
         else:
             embed = discord.Embed(
                 title="💔 Industrial Revolution Interrupted",
                 description="Something went wrong. You can try again.",
-                color=discord.Color.red()
+                color=discord.Color.red(),
             )
             await ctx.send(embed=embed)
-        self.db.log_event(user_id, "industrial_revolution", "Industrial Revolution Ended",
-                          f"Power: {power}/1000 - {'Success' if power>=1000 else 'Failure'}")
+        self.db.log_event(
+            user_id, "industrial_revolution", "Industrial Revolution Ended",
+            f"Power: {power}/1000 - {'Success' if power>=1000 else 'Failure'}"
+        )
 
-    # ---------- COMMANDS (with cooldowns via decorator) ----------
+    # ---------- START ----------
     @commands.command(name='industrial_start')
     @industrial_cooldown("industrial_start")
     async def industrial_start(self, ctx):
         user_id = str(ctx.author.id)
         data = self._get_revolution(user_id)
-        if data and data.get("completed", False):
-            await ctx.send("❌ You have already completed the Industrial Revolution! It cannot be started again.")
-            return
-        if data and data["active"]:
+
+        # Only block if there's an ACTIVE revolution running right now.
+        # Completed players and previously-stopped players are allowed to restart.
+        if data and data.get("active"):
             await ctx.send("❌ You already have an active revolution! Use `.industrial_status` to check.")
             return
+
         civ = self.civ_manager.get_civilization(user_id)
         if not civ:
             await ctx.send("❌ You need a civilization first! Use `.start`.")
             return
-        embed = discord.Embed(
-            title="🏭 Start the Industrial Revolution?",
-            description=(
-                "This is a permanent challenge – no time limit.\n"
+
+        # Preserve the completed_once flag across restarts
+        completed_once = bool(data.get("completed_once")) if data else False
+
+        if completed_once:
+            confirm_text = (
+                "🏭 **Re-run the Industrial Revolution?**\n\n"
+                "You've completed this challenge before. Re-running is **for fun / sandbox mode** — "
+                "you already proved yourself once. **Rewards do not stack** for replay completions.\n\n"
+                "Type `yes` to confirm."
+            )
+        else:
+            confirm_text = (
+                "🏭 **Start the Industrial Revolution?**\n\n"
+                "This is a permanent challenge — no time limit.\n"
                 "You must reach **1000 Industrial Power** to complete it.\n"
                 "**Every command** you type has a 30% chance to trigger a disaster.\n"
-                "**You can only do this once!**\n\n"
+                "**You can only use `.industrial_stop` before your first completion.**\n\n"
                 "Type `yes` to confirm."
-            ),
-            color=discord.Color.orange()
+            )
+
+        embed = discord.Embed(
+            title="🏭 Industrial Revolution",
+            description=confirm_text,
+            color=discord.Color.orange(),
         )
         await ctx.send(embed=embed)
 
         def check(m):
-            return m.author.id == ctx.author.id and m.channel.id == ctx.channel.id and m.content.lower() == "yes"
-
+            return (m.author.id == ctx.author.id
+                    and m.channel.id == ctx.channel.id
+                    and m.content.lower() == "yes")
         try:
             await self.bot.wait_for('message', timeout=30.0, check=check)
         except asyncio.TimeoutError:
@@ -323,8 +366,9 @@ class IndustrialCog(commands.Cog):
         data = {
             "active": True,
             "completed": False,
+            "completed_once": completed_once,   # preserved across restarts
             "started_at": now,
-            "stats": stats
+            "stats": stats,
         }
         self._save_revolution(user_id, data)
 
@@ -336,11 +380,154 @@ class IndustrialCog(commands.Cog):
                 "plus **20+ new commands** – see `.indushelp` for the full list.\n"
                 "Every command you type may cause chaos! Good luck."
             ),
-            color=discord.Color.green()
+            color=discord.Color.green(),
         )
         await ctx.send(embed=embed)
-        self.db.log_event(user_id, "industrial_revolution", "Industrial Revolution Started", "Began the revolution.")
+        self.db.log_event(user_id, "industrial_revolution", "Industrial Revolution Started",
+                          "Began the revolution.")
 
+    # ---------- STOP ----------
+    @commands.command(name='industrial_stop')
+    async def industrial_stop(self, ctx):
+        """Abandon your revolution. Heavy consequences. Locked after first completion."""
+        user_id = str(ctx.author.id)
+        data = self._get_revolution(user_id)
+
+        if not data or not data.get("active"):
+            await ctx.send("❌ You don't have an active Industrial Revolution to stop.")
+            return
+
+        # --- PERMANENT LOCK AFTER FIRST COMPLETION ---
+        if data.get("completed_once"):
+            embed = discord.Embed(
+                title="🚫 You Can't Stop Now",
+                description=(
+                    "You've already completed the Industrial Revolution once. "
+                    "You proved you could do it.\n\n"
+                    "**You are past the point of no return.**\n\n"
+                    "*You know what it takes. Finish what you started.*"
+                ),
+                color=discord.Color.dark_red(),
+            )
+            await ctx.send(embed=embed)
+            return
+
+        civ = self.civ_manager.get_civilization(user_id)
+        if not civ:
+            await ctx.send("❌ You need a civilization first.")
+            return
+
+        gold = int(civ['resources'].get('gold', 0))
+        gold_loss = int(gold * 0.30)
+        power = data["stats"].get("industrial_power", 0)
+
+        embed = discord.Embed(
+            title="⚠️ ABANDON THE INDUSTRIAL REVOLUTION?",
+            description=(
+                "**You are about to tear down what you built.**\n\n"
+                f"Current Industrial Power: **{power}/1000**\n"
+                f"Your gold on hand: 🪙 {format_number(gold)}\n\n"
+                "**Consequences:**\n"
+                "• 💥 One of two disasters will strike at random\n"
+                "• 🪙 You will lose **30%** of your gold\n"
+                "• 🇴 Your people will cry: *\"Why did we waste our money on this?\"*\n\n"
+                "You **can** start a new revolution afterward.\n"
+                "**This command is permanent-locked once you complete the challenge.**\n\n"
+                "Type `stop` within 60 seconds to confirm."
+            ),
+            color=discord.Color.dark_red(),
+        )
+        await ctx.send(embed=embed)
+
+        def check(m):
+            return (m.author.id == ctx.author.id
+                    and m.channel.id == ctx.channel.id
+                    and m.content.strip().lower() == "stop")
+        try:
+            await self.bot.wait_for('message', timeout=60.0, check=check)
+        except asyncio.TimeoutError:
+            await ctx.send("🛑 Stop cancelled. Your revolution continues.")
+            return
+
+        # --- Gold loss ---
+        self.civ_manager.update_resources(user_id, {"gold": -gold_loss})
+
+        # --- Coin flip: civil war or happiness crash ---
+        disaster = random.choice(["civil_war", "happiness_crash"])
+        war_msg = ""
+
+        if disaster == "civil_war":
+            try:
+                current_happiness = civ['population'].get('happiness', 50)
+                self.civ_manager.update_population(user_id, {
+                    "happiness": -current_happiness - 100,
+                })
+                result = self.civ_manager.trigger_civil_war(user_id, cause="people")
+                if result and result.get("state"):
+                    state = result["state"]
+                    war_msg = (
+                        f"\n\n💥 **CIVIL WAR ERUPTS!**\n"
+                        f"Rebels seized **{len(state.get('rebel_territories', []))} territories**.\n"
+                        f"Rebel strength: **{state.get('rebel_strength')}** troops."
+                    )
+                else:
+                    war_msg = "\n\nThe unrest simmers, but no open war broke out yet."
+            except Exception as e:
+                logger.error(f"industrial_stop civil_war trigger failed: {e}")
+                war_msg = "\n\n💥 The nation teeters on the brink of collapse."
+
+            title = "💥 REVOLUTION COLLAPSED"
+            flavor = "*The workers stormed the factories. Nothing will be built here again.*"
+        else:
+            try:
+                self.civ_manager.update_population(user_id, {"happiness": -200})
+            except Exception as e:
+                logger.error(f"industrial_stop happiness crash failed: {e}")
+
+            title = "💔 A NATION BROKEN"
+            flavor = "*\"Why did we waste our money on this?\" — a citizen, crying in the street.*"
+
+        # --- Reset the revolution so they can redo it ---
+        try:
+            data["active"] = False
+            data["completed"] = False
+            data["started_at"] = None
+            data["stats"] = DEFAULT_STATS.copy()
+            # completed_once stays as-is (False for this player)
+            self._save_revolution(user_id, data)
+            self._active_revolutions.pop(user_id, None)
+        except Exception as e:
+            logger.error(f"industrial_stop reset failed: {e}")
+
+        embed = discord.Embed(
+            title=title,
+            description=flavor + war_msg,
+            color=discord.Color.dark_red(),
+        )
+        embed.add_field(
+            name="🪙 Gold Lost",
+            value=f"**{format_number(gold_loss)}** ({format_number(gold)} → {format_number(gold - gold_loss)})",
+            inline=True,
+        )
+        embed.add_field(
+            name="😡 Happiness",
+            value="**-100%**",
+            inline=True,
+        )
+        embed.add_field(
+            name="🚧 Revolution Status",
+            value="**Reset.** You may start again with `.industrial_start`.",
+            inline=False,
+        )
+        embed.set_footer(text="Every empire is built on a graveyard of failed ideas.")
+        await ctx.send(embed=embed)
+
+        self.db.log_event(
+            user_id, "industrial_stop", "Industrial Revolution Abandoned",
+            f"Player stopped the revolution. Disaster: {disaster}. Gold lost: {gold_loss}."
+        )
+
+    # ---------- STATUS ----------
     @commands.command(name='industrial_status')
     @industrial_cooldown("industrial_status")
     async def industrial_status(self, ctx):
@@ -348,7 +535,7 @@ class IndustrialCog(commands.Cog):
         data = self._get_revolution(user_id)
         if not data or not data["active"]:
             if data and data.get("completed", False):
-                await ctx.send("✅ You already completed the Industrial Revolution! Use `.industrial_status` to view final stats? (Not implemented yet)")
+                await ctx.send("✅ You already completed the Industrial Revolution! Use `.industrial_start` to run it again.")
                 return
             await ctx.send("❌ No active revolution. Use `.industrial_start`.")
             return
@@ -356,7 +543,7 @@ class IndustrialCog(commands.Cog):
         embed = discord.Embed(
             title="🏭 Industrial Revolution Status",
             description="Reach 1000 Industrial Power to complete it.",
-            color=discord.Color.blue()
+            color=discord.Color.blue(),
         )
         groups = {
             "⚙️ Core": ["industrial_power", "factory_output", "production_efficiency", "tech_level"],
@@ -365,7 +552,7 @@ class IndustrialCog(commands.Cog):
             "📦 Resources": ["resource_stockpile", "raw_materials", "financial_reserves", "coal_quality"],
             "🌍 Environment": ["pollution", "environmental_damage"],
             "🛡️ Safety & Stability": ["machine_breakdown_risk", "military_protection", "government_support", "public_trust", "trade_influence"],
-            "⚡ Power": ["steam_pressure"]
+            "⚡ Power": ["steam_pressure"],
         }
         for group_name, keys in groups.items():
             lines = []
@@ -388,10 +575,13 @@ class IndustrialCog(commands.Cog):
         embed.add_field(
             name="Progress to 1000",
             value=f"`{bar}` {stats['industrial_power']}/1000",
-            inline=False
+            inline=False,
         )
         await ctx.send(embed=embed)
 
+    # =================================================================
+    # INDUSTRIAL COMMANDS (all unchanged)
+    # =================================================================
     @commands.command(name='industrial_build')
     @industrial_cooldown("industrial_build")
     async def industrial_build(self, ctx):
@@ -823,7 +1013,6 @@ class IndustrialCog(commands.Cog):
         self._save_revolution(user_id, data)
         await ctx.send("🏙️ City expanded! Urbanization +30, Power +15.")
 
-    # ---- FIXED BANKING COMMAND (no infinite spam) ----
     @commands.command(name='industrial_banking')
     @industrial_cooldown("industrial_banking")
     async def industrial_banking(self, ctx):
@@ -832,29 +1021,25 @@ class IndustrialCog(commands.Cog):
         if not data or not data["active"]:
             await ctx.send("❌ No active revolution.")
             return
-        
+
         stats = data["stats"]
-        
-        # Check max uses limit (stored in stats)
         banking_uses = stats.get("banking_uses", 0)
         max_uses = config.INDUSTRIAL.get("banking_max_uses", 5)
-        
+
         if banking_uses >= max_uses:
             await ctx.send(f"❌ You have already used banking {max_uses} times, which is the maximum allowed for this revolution.")
             return
-        
+
         if stats["financial_reserves"] < 100:
             await ctx.send("❌ Need 100 Gold to invest.")
             return
-        
+
         stats["financial_reserves"] -= 100
-        # Random return: 150-300 gold (profit 50-200)
         gain = random.randint(150, 300)
         stats["financial_reserves"] += gain
         stats["industrial_power"] += 20
-        # Increment use counter
         stats["banking_uses"] = banking_uses + 1
-        
+
         self._save_revolution(user_id, data)
         await ctx.send(f"🏦 Banking invest! +{gain} Gold, +20 Power. (Uses: {banking_uses+1}/{max_uses})")
 
@@ -881,39 +1066,27 @@ class IndustrialCog(commands.Cog):
         embed = discord.Embed(
             title="🏭 Industrial Revolution – Complete Command List",
             description=(
-                "**Goal:** Reach 1000 Industrial Power (once per player).\n"
-                "**Caution:** Every command has a 30% disaster chance!\n\n"
+                "**Goal:** Reach 1000 Industrial Power.\n"
+                "**Caution:** Every command has a 30% disaster chance!\n"
+                "**Lock:** `.industrial_stop` becomes permanently unavailable after your first completion.\n\n"
                 "**Core Commands:**\n"
                 "`.industrial_start` – Begin (requires `yes` confirmation).\n"
                 "`.industrial_status` – View all 25+ stats.\n"
+                "`.industrial_stop` – Abandon the revolution (30% gold loss + civil war OR -100% happiness).\n"
                 "`.industrial_build` – Build a factory.\n"
                 "`.industrial_tech` – Research technology.\n"
                 "`.industrial_workers` – Train workers.\n"
                 "`.industrial_cleanup` – Reduce pollution.\n\n"
                 "**20+ Extra Commands:**\n"
-                "`.industrial_railway` – Build railways.\n"
-                "`.industrial_transport` – Improve transport.\n"
-                "`.industrial_army` – Raise military protection.\n"
-                "`.industrial_policy` – Enact a new policy.\n"
-                "`.industrial_import` – Import raw materials.\n"
-                "`.industrial_export` – Export goods.\n"
-                "`.industrial_steam` – Research steam power.\n"
-                "`.industrial_mine` – Build a mine.\n"
-                "`.industrial_hospital` – Build a hospital.\n"
-                "`.industrial_school` – Build a school.\n"
-                "`.industrial_law` – Enforce law and order.\n"
-                "`.industrial_trade` – Diplomatic trade.\n"
-                "`.industrial_aid` – Request foreign aid.\n"
-                "`.industrial_suppress` – Suppress revolts.\n"
-                "`.industrial_bribe` – Bribe workers.\n"
-                "`.industrial_automate` – Automate factories.\n"
-                "`.industrial_upgrade` – Upgrade factories.\n"
-                "`.industrial_relief` – Disaster relief.\n"
-                "`.industrial_expand` – Expand cities.\n"
-                "`.industrial_banking` – Invest in banking (max 5 uses).\n"
-                "`.industrial_nationalize` – Nationalize industry."
+                "`.industrial_railway` · `.industrial_transport` · `.industrial_army`\n"
+                "`.industrial_policy` · `.industrial_import` · `.industrial_export`\n"
+                "`.industrial_steam` · `.industrial_mine` · `.industrial_hospital`\n"
+                "`.industrial_school` · `.industrial_law` · `.industrial_trade`\n"
+                "`.industrial_aid` · `.industrial_suppress` · `.industrial_bribe`\n"
+                "`.industrial_automate` · `.industrial_upgrade` · `.industrial_relief`\n"
+                "`.industrial_expand` · `.industrial_banking` · `.industrial_nationalize`"
             ),
-            color=discord.Color.blue()
+            color=discord.Color.blue(),
         )
         embed.set_footer(text="Manage wisely – disasters are brutal!")
         await ctx.send(embed=embed)
@@ -940,13 +1113,15 @@ class IndustrialCog(commands.Cog):
                     self._active_revolutions[user_id] = {
                         "active": data.get("active", False),
                         "completed": data.get("completed", False),
+                        "completed_once": data.get("completed_once", False),
                         "started_at": started_at,
-                        "stats": stats
+                        "stats": stats,
                     }
                     count += 1
             logger.info(f"Restored {count} industrial revolutions from Firestore.")
         except Exception as e:
             logger.error(f"Error loading industrial revolutions on_ready: {e}")
+
 
 async def setup(bot):
     await bot.add_cog(IndustrialCog(bot))

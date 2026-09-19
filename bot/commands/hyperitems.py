@@ -24,7 +24,6 @@ class HyperItemCommands(commands.Cog):
         return item_name in civ.get('hyper_items', [])
 
     def _is_allied(self, user_id: str, target_id: str) -> bool:
-        """True if the two users share an alliance."""
         try:
             for doc in self.db.client.collection("alliances").where("members", "array_contains", user_id).stream():
                 if target_id in doc.to_dict().get("members", []):
@@ -34,12 +33,10 @@ class HyperItemCommands(commands.Cog):
         return False
 
     def _tech_mult(self, civ: dict) -> float:
-        """Power-curve scaling helper: 1x at tech 1, ~3x at tech 10."""
         tech = civ['military']['tech_level']
-        return 1 + (tech * 0.20)
+        return 1 + (tech * config.POWER_CURVE.get("hyperitem_tech_mult", 0.05))
 
     def _pop_mult(self, civ: dict) -> float:
-        """Population scaling: 1x at 1000 citizens, grows with pop."""
         return 1 + (civ['population']['citizens'] / 5000)
 
     async def _block_with_shield(self, ctx, target_id: str, target_civ, attacker_civ, attack_type: str):
@@ -94,7 +91,7 @@ class HyperItemCommands(commands.Cog):
         return None
 
     # =================================================================
-    # LAST STAND
+    # LAST STAND — AURA MODE
     # =================================================================
     @commands.command(name='laststand')
     async def last_stand(self, ctx):
@@ -109,8 +106,13 @@ class HyperItemCommands(commands.Cog):
         if civ['resources']['gold'] >= 500:
             await ctx.send("❌ **Last Stand** can only be used when you have less than 500 gold!")
             return
+
         self.civ_manager.use_hyper_item(user_id, "Last Stand")
+
+        # Poverty scaling
         poverty_factor = max(0.1, (500 - civ['resources']['gold']) / 500)
+
+        # Military surge
         military_boost_multiplier = 3.0 + (poverty_factor * 7.0)
         soldiers_boost = int(civ['military']['soldiers'] * military_boost_multiplier)
         spies_boost = int(civ['military']['spies'] * military_boost_multiplier)
@@ -118,25 +120,61 @@ class HyperItemCommands(commands.Cog):
         self.civ_manager.update_military(user_id, {
             "soldiers": soldiers_boost,
             "spies": spies_boost,
-            "tech_level": tech_boost
+            "tech_level": tech_boost,
         })
+
+        # Aura gift
+        gold_gift = 500_000
+        stone_gift = 10_000
+        wood_gift = 10_000
+        food_gift = 50_000
+        self.civ_manager.update_resources(user_id, {
+            "gold": gold_gift,
+            "stone": stone_gift,
+            "wood": wood_gift,
+            "food": food_gift,
+        })
+
         self.civ_manager.update_population(user_id, {"happiness": 40})
+
         embed = create_embed(
-            "💥 LAST STAND ACTIVATED!",
-            f"**{civ['name']}** makes a desperate final stand with nothing left to lose!",
-            guilded.Color.dark_red()
+            "💥 LAST STAND ACTIVATED — AURA MODE",
+            f"**{civ['name']}** has nothing left to lose — and everything to prove.\n\n"
+            f"*The nation rises from ash. The people roar. The world watches.*",
+            guilded.Color.dark_red(),
         )
-        embed.add_field(name="Desperation Bonus",
-                        value=f"Poverty: {poverty_factor:.1f}x → Total Boost: {military_boost_multiplier:.1f}x",
-                        inline=False)
-        embed.add_field(name="Reinforcements",
-                        value=f"⚔️ {format_number(soldiers_boost)} soldiers\n🕵️ {format_number(spies_boost)} spies\n🔬 +{tech_boost} tech",
-                        inline=True)
-        embed.add_field(name="Morale Surge", value="😊 +40 Happiness", inline=True)
+        embed.add_field(
+            name="🔥 Desperation Bonus",
+            value=f"Poverty factor: `{poverty_factor:.2f}` × → multiplier `{military_boost_multiplier:.2f}×`",
+            inline=False,
+        )
+        embed.add_field(
+            name="⚔️ Military Surge",
+            value=(f"⚔️ **+{format_number(soldiers_boost)}** soldiers\n"
+                   f"🕵️ **+{format_number(spies_boost)}** spies\n"
+                   f"🔬 **+{tech_boost}** tech levels"),
+            inline=True,
+        )
+        embed.add_field(
+            name="💰 Aura Gift",
+            value=(f"🪙 **+{format_number(gold_gift)}** gold\n"
+                   f"🌾 **+{format_number(food_gift)}** food\n"
+                   f"🪨 **+{format_number(stone_gift)}** stone\n"
+                   f"🪵 **+{format_number(wood_gift)}** wood"),
+            inline=True,
+        )
+        embed.add_field(name="😤 Morale Surge", value="😊 **+40** happiness", inline=False)
+        embed.set_footer(text="You spent your last coin. The nation answered.")
         await ctx.send(embed=embed)
 
+        self.db.log_event(
+            user_id, "laststand", "Last Stand Activated",
+            f"Triggered at <500 gold. Gained {gold_gift} gold, "
+            f"{soldiers_boost} soldiers, {spies_boost} spies, +{tech_boost} tech."
+        )
+
     # =================================================================
-    # SACRIFICE
+    # SACRIFICE — FULL RESET ON REFLECT
     # =================================================================
     @commands.command(name='sacrifice')
     @app_commands.describe(target="Target civilization leader")
@@ -161,39 +199,165 @@ class HyperItemCommands(commands.Cog):
             await ctx.send("❌ Target user doesn't have a civilization!")
             return
 
-        defense = self._check_defenses(target_id, "sacrifice")
-        if defense == "mirror":
-            await self._reflect_with_mirror(ctx, target_id, target_civ, civ, "mutual destruction sacrifice")
-            try:
-                if self.db.delete_civilization(user_id):
-                    await ctx.send("💀 **SACRIFICE REFLECTED!** You were destroyed by your own reflected sacrifice!")
-                    try:
-                        attacker_user = await self.bot.fetch_user(int(user_id))
-                        await attacker_user.send("💀 **SACRIFICE REFLECTED!** Your mutual destruction attempt was reflected back at you!")
-                    except Exception:
-                        pass
-                else:
-                    await ctx.send("❌ Failed to delete your civilization after reflection.")
-            except Exception as e:
-                logger.error(f"Error in reflected sacrifice: {e}")
-            return
-
-        def check(m):
-            return m.author.id == ctx.author.id and m.channel.id == ctx.channel.id and m.content.lower() == 'confirm'
-
+        # 1. CONFIRMATION FIRST
         embed = create_embed(
             "💀 FINAL WARNING: MUTUAL DESTRUCTION",
             f"**This will COMPLETELY DESTROY both {civ['name']} and {target_civ['name']}!**",
-            guilded.Color.dark_red()
+            guilded.Color.dark_red(),
         )
         embed.add_field(name="CONFIRMATION", value="Type `confirm` in the next 30 seconds.", inline=False)
         embed.add_field(name="Effects", value="• Both civilizations permanently deleted\n• All progress lost", inline=False)
+        embed.add_field(
+            name="⚠️ Defense Warning",
+            value=(
+                "If the target has a **Mirror**, your attack will be reflected:\n"
+                "• **Your** civ is DELETED\n"
+                "• Their civ **survives but is completely reset** — 0 gold, 0 food, 0 stone, 0 wood, "
+                "0 soldiers, −100 happiness, corporations and bank wiped.\n\n"
+                "If the target has an **Anti-Nuke Shield**, the entire Sacrifice is blocked. "
+                "Your item is consumed for nothing."
+            ),
+            inline=False,
+        )
         await ctx.send(embed=embed)
+
+        def check(m):
+            return (m.author.id == ctx.author.id
+                    and m.channel.id == ctx.channel.id
+                    and m.content.lower() == 'confirm')
         try:
             await self.bot.wait_for('message', timeout=30.0, check=check)
         except asyncio.TimeoutError:
             await ctx.send("❌ Mutual destruction cancelled.")
             return
+
+        # 2. NOW check defenses
+        defense = self._check_defenses(target_id, "sacrifice")
+
+        if defense == "mirror":
+            self.civ_manager.use_hyper_item(user_id, "Sacrifice")
+            await self._reflect_with_mirror(ctx, target_id, target_civ, civ, "mutual destruction sacrifice")
+
+            # TOTAL RESET of the surviving defender
+            resources = target_civ.get('resources', {}) or {}
+            wipe_res = {r: -int(v) for r, v in resources.items() if v > 0}
+            if wipe_res:
+                self.civ_manager.update_resources(target_id, wipe_res)
+
+            current_soldiers = int(target_civ['military'].get('soldiers', 0))
+            if current_soldiers:
+                self.civ_manager.update_military(target_id, {"soldiers": -current_soldiers})
+
+            current_happiness = int(target_civ['population'].get('happiness', 50))
+            self.civ_manager.update_population(target_id, {
+                "happiness": -current_happiness - 100,
+                "hunger": 100,
+            })
+
+            # Wipe corporations
+            try:
+                user_corps = self.db.get_user_corporations(target_id)
+                for c in user_corps:
+                    self.db.delete_corporation(c["id"])
+            except Exception as e:
+                logger.error(f"Failed to wipe corporations for {target_id}: {e}")
+
+            # Wipe bank
+            try:
+                self.civ_manager.db.update_civilization(target_id, {
+                    "bank": {
+                        "deposits": 0, "loan": 0,
+                        "loan_opened_at": None, "last_interest": None,
+                        "credit_score": 0, "locked_until": None,
+                    }
+                })
+                self.civ_manager._invalidate_civ(target_id)
+            except Exception as e:
+                logger.error(f"Failed to wipe bank for {target_id}: {e}")
+
+            # Delete attacker
+            try:
+                if self.db.delete_civilization(user_id):
+                    fallout = guilded.Embed(
+                        title="💀 SACRIFICE REFLECTED",
+                        description=(
+                            f"**{civ['name']}** attempted mutual destruction on **{target_civ['name']}** — "
+                            f"but the Mirror caught it. The blast tore through both sides."
+                        ),
+                        color=guilded.Color.dark_red(),
+                    )
+                    fallout.add_field(
+                        name="☠️ Attacker",
+                        value=f"**{civ['name']}** — *civ deleted by their own Sacrifice*",
+                        inline=False,
+                    )
+                    fallout.add_field(
+                        name="🩸 Defender (Reset)",
+                        value=(
+                            f"**{target_civ['name']}** survived the blast but lost EVERYTHING:\n"
+                            "• 🪙🌾🪨🪵 All resources → **0**\n"
+                            "• ⚔️ All soldiers → **0**\n"
+                            "• 😡 Happiness → **−100**\n"
+                            "• 🍽️ Hunger → **100**\n"
+                            "• 🏢 All corporations → **gone**\n"
+                            "• 🏦 Bank (deposits, credit, history) → **wiped**\n\n"
+                            "*They still have their citizens, spies, tech, and land — "
+                            "but they rebuild from ash.*"
+                        ),
+                        inline=False,
+                    )
+                    await ctx.send(embed=fallout)
+
+                    try:
+                        au = await self.bot.fetch_user(int(user_id))
+                        await au.send(
+                            f"💀 **SACRIFICE REFLECTED!** Your mutual destruction was caught by "
+                            f"{target_civ['name']}'s Mirror. Your civilization has been destroyed."
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        tu = await self.bot.fetch_user(int(target_id))
+                        await tu.send(
+                            f"🩸 **You survived a Sacrifice — but you lost everything.**\n"
+                            f"Your Mirror reflected **{civ['name']}**'s attack, but the blast reset your nation:\n"
+                            f"• All resources → 0\n• All soldiers → 0\n"
+                            f"• Happiness → −100\n• All corporations deleted\n• Bank wiped\n\n"
+                            f"Your citizens, spies, tech, and land remain. Rebuild carefully."
+                        )
+                    except Exception:
+                        pass
+                else:
+                    await ctx.send("❌ Failed to delete attacker's civilization after reflection.")
+            except Exception as e:
+                logger.error(f"Error in reflected sacrifice: {e}")
+            return
+
+        if defense == "shield":
+            self.civ_manager.use_hyper_item(user_id, "Sacrifice")
+            await self._block_with_shield(ctx, target_id, target_civ, civ, "mutual destruction sacrifice")
+            blocker = guilded.Embed(
+                title="🛡️ Sacrifice Blocked",
+                description=(
+                    f"**{target_civ['name']}**'s Anti-Nuke Shield absorbed the mutual destruction blast.\n\n"
+                    f"**{civ['name']}**'s Sacrifice was consumed — but **no civilizations were harmed.**"
+                ),
+                color=guilded.Color.blue(),
+            )
+            blocker.add_field(
+                name="Result",
+                value=(
+                    "• Attacker's Sacrifice: **consumed**\n"
+                    "• Defender's Shield: **consumed**\n"
+                    "• Civs destroyed: **none**\n"
+                    "• Civs reset: **none**"
+                ),
+                inline=False,
+            )
+            await ctx.send(embed=blocker)
+            return
+
+        # 3. No defense — mutual destruction
         self.civ_manager.use_hyper_item(user_id, "Sacrifice")
         try:
             success1 = self.db.delete_civilization(user_id)
@@ -205,20 +369,21 @@ class HyperItemCommands(commands.Cog):
             embed = create_embed(
                 "💀 MUTUAL DESTRUCTION COMPLETE",
                 f"**{civ['name']}** and **{target_civ['name']}** have been annihilated!",
-                guilded.Color.dark_red()
+                guilded.Color.dark_red(),
             )
             await ctx.send(embed=embed)
             try:
-                target_user = await self.bot.fetch_user(int(target_id))
-                await target_user.send(f"💀 **MUTUAL DESTRUCTION!** Your civilization was destroyed in a mutual sacrifice with {civ['name']}!")
+                tu = await self.bot.fetch_user(int(target_id))
+                await tu.send(f"💀 **MUTUAL DESTRUCTION!** Your civilization was destroyed in a mutual sacrifice with {civ['name']}!")
             except Exception:
                 pass
             try:
-                user = await self.bot.fetch_user(int(user_id))
-                await user.send(f"💀 **SACRIFICE COMPLETE!** You destroyed both yourself and {target_civ['name']}.")
+                u = await self.bot.fetch_user(int(user_id))
+                await u.send(f"💀 **SACRIFICE COMPLETE!** You destroyed both yourself and {target_civ['name']}.")
             except Exception:
                 pass
-            self.db.log_event(user_id, "mutual_destruction", "Mutual Destruction", f"Destroyed both {civ['name']} and {target_civ['name']}")
+            self.db.log_event(user_id, "mutual_destruction", "Mutual Destruction",
+                              f"Destroyed both {civ['name']} and {target_civ['name']}")
         except Exception as e:
             logger.error(f"Error in mutual destruction: {e}")
             await ctx.send("❌ Failed to execute mutual destruction.")
@@ -240,9 +405,9 @@ class HyperItemCommands(commands.Cog):
         )
         embed.add_field(name="Mirror Status", value="✅ **ACTIVE** - Will reflect the next ANY attack", inline=False)
         embed.add_field(name="God-Tier Reflection",
-                        value="• Reflects nukes, obliteration, missiles, assassinations\n"
-                              "• Reflects propaganda, spy ops, sacrifice\n"
-                              "• Consumed after one reflection",
+                        value=("• Reflects nukes, obliteration, missiles, assassinations\n"
+                               "• Reflects propaganda, spy ops, sacrifice\n"
+                               "• Consumed after one reflection"),
                         inline=False)
         await ctx.send(embed=embed)
 
@@ -322,19 +487,11 @@ class HyperItemCommands(commands.Cog):
         self.db.log_event(target_id, "nuclear_victim", "Nuclear Attack Victim", f"Devastated by {civ['name']}")
 
     # =================================================================
-    # OBLITERATE — REWORKED
+    # OBLITERATE
     # =================================================================
     @commands.command(name='obliterate')
     @app_commands.describe(target="Target civilization leader")
     async def obliterate_civilization(self, ctx, target: Optional[guilded.Member] = None):
-        """
-        HyperLaser obliteration.
-
-        - If target already has ANY stat at 0 -> instant kill.
-        - Otherwise -> randomly zero one of their stats (gold/food/wood/stone/soldiers/citizens)
-          OR set happiness to -100 (instant civil war).
-        - 30% chance the laser BACKFIRES: your own civilization is obliterated instead.
-        """
         if not target:
             await ctx.send("💥 **Total Obliteration**\nUsage: `.obliterate <user>`\nRequires: HyperLaser\n⚠️ 30% backfire chance!")
             return
@@ -355,7 +512,6 @@ class HyperItemCommands(commands.Cog):
             await ctx.send("❌ You need to start a civilization first!")
             return
 
-        # ---- Defense checks ----
         defense = self._check_defenses(target_id, "HyperLaser obliteration")
         if defense == "mirror":
             await self._reflect_with_mirror(ctx, target_id, target_civ, civ, "HyperLaser obliteration")
@@ -374,7 +530,6 @@ class HyperItemCommands(commands.Cog):
             await self._block_with_shield(ctx, target_id, target_civ, civ, "HyperLaser obliteration")
             return
 
-        # ---- Check if target has any stat at 0 (easy kill) ----
         target_stats = {
             "gold": target_civ['resources']['gold'],
             "stone": target_civ['resources']['stone'],
@@ -387,9 +542,8 @@ class HyperItemCommands(commands.Cog):
 
         self.civ_manager.use_hyper_item(user_id, "HyperLaser")
 
-        # ---- 30% backfire (only for the "forced" version) ----
         if not has_zero and random.random() < 0.30:
-            # BACKFIRE! The HyperLaser overloads and destroys the wielder.
+            # BACKFIRE
             try:
                 if self.db.delete_civilization(user_id):
                     await self._announce_global_attack(ctx, civ['name'], civ['name'], "HyperLaser Backfire")
@@ -420,7 +574,6 @@ class HyperItemCommands(commands.Cog):
                 await ctx.send("❌ Error processing backfire.")
             return
 
-        # ---- EASY KILL PATH ----
         if has_zero:
             try:
                 if not self.db.delete_civilization(target_id):
@@ -447,14 +600,12 @@ class HyperItemCommands(commands.Cog):
                 await ctx.send("❌ Failed to obliterate civilization.")
             return
 
-        # ---- FORCED RESET PATH (target has no zero stats, survived backfire) ----
+        # FORCED RESET PATH
         reset_choice = random.choice(["gold", "food", "wood", "stone", "soldiers", "citizens", "happiness"])
 
         if reset_choice == "happiness":
-            # Force happiness to -100 → instant civil war on next check
             current_h = target_civ['population']['happiness']
             self.civ_manager.update_population(target_id, {"happiness": -100 - current_h})
-            # Immediately trigger the civil war
             try:
                 self.civ_manager.trigger_civil_war(target_id)
             except Exception as e:
@@ -468,7 +619,6 @@ class HyperItemCommands(commands.Cog):
             embed.add_field(name="😡 Happiness → -100", value="The nation has spiraled into chaos. **A civil war has erupted!**", inline=False)
             embed.add_field(name="⚔️ Effect", value="The target's territories are now split between loyalists and rebels.", inline=False)
         else:
-            # Zero out the chosen resource/unit stat
             if reset_choice in ("gold", "food", "wood", "stone"):
                 current = target_civ['resources'][reset_choice]
                 self.civ_manager.update_resources(target_id, {reset_choice: -current})
@@ -477,7 +627,7 @@ class HyperItemCommands(commands.Cog):
                 current = target_civ['military']['soldiers']
                 self.civ_manager.update_military(target_id, {"soldiers": -current})
                 display = f"⚔️ Soldiers"
-            else:  # citizens
+            else:
                 current = target_civ['population']['citizens']
                 self.civ_manager.update_population(target_id, {"citizens": -current})
                 display = f"👥 Citizens"
@@ -513,7 +663,8 @@ class HyperItemCommands(commands.Cog):
                              guilded.Color.blue())
         embed.add_field(name="Shield Status", value="✅ **ACTIVE** - Auto-blocks the next ANY attack", inline=False)
         embed.add_field(name="God-Tier Protection",
-                        value="• Blocks nukes, obliteration, missiles, assassinations, propaganda, spy ops\n• Consumed after one block",
+                        value=("• Blocks nukes, obliteration, missiles, assassinations, propaganda, spy ops\n"
+                               "• Consumed after one block"),
                         inline=False)
         await ctx.send(embed=embed)
 
@@ -527,14 +678,17 @@ class HyperItemCommands(commands.Cog):
             await ctx.send("❌ You need a **Lucky Charm** HyperItem!")
             return
         self.civ_manager.use_hyper_item(user_id, "Lucky Charm")
+        if not self.civ_manager.set_lucky_strike(user_id):
+            await ctx.send("❌ Failed to arm Lucky Strike. Try again.")
+            return
         civ = self.civ_manager.get_civilization(user_id)
-        bonuses = civ.get('bonuses', {})
-        bonuses['next_action_critical'] = True
-        self.civ_manager.db.update_civilization(user_id, {"bonuses": bonuses})
         embed = create_embed("🍀 Lucky Charm Activated!",
                              f"**{civ['name']}** radiates with mystical fortune!",
                              guilded.Color.gold())
-        embed.add_field(name="Effect", value="Your next combat action, resource gathering, or diplomacy attempt will have guaranteed critical success!", inline=False)
+        embed.add_field(name="Effect",
+                        value="Next attack / naval strike / air strike / gather = **guaranteed critical**.",
+                        inline=False)
+        embed.set_footer(text="Consumed on next qualifying action.")
         await ctx.send(embed=embed)
 
     # =================================================================
@@ -590,7 +744,7 @@ class HyperItemCommands(commands.Cog):
             pass
 
     # =================================================================
-    # HIRE MERCS — scaled
+    # HIRE MERCS
     # =================================================================
     @commands.command(name='hiremercs')
     async def hire_mercenaries(self, ctx):
@@ -601,24 +755,26 @@ class HyperItemCommands(commands.Cog):
         civ = self.civ_manager.get_civilization(user_id)
         self.civ_manager.use_hyper_item(user_id, "Mercenary Contract")
 
-        # Power-curve scaling: base + tech mult + pop mult
-        base_soldiers = 50 + (civ['military']['soldiers'] // 4)
         tech_mult = self._tech_mult(civ)
-        pop_mult = self._pop_mult(civ)
-        mercenaries_hired = int(base_soldiers * tech_mult * pop_mult)
-        spies_hired = max(5, int((10 + civ['military']['spies'] // 3) * tech_mult))
+        pop_factor = min(2.0, 1.0 + (civ['population']['citizens'] / 50000))
+        base_soldiers = 60
+        mercenaries_hired = int(base_soldiers * tech_mult * pop_factor)
+        spies_hired = int(8 * tech_mult * pop_factor)
 
         self.civ_manager.update_military(user_id, {
             "soldiers": mercenaries_hired,
             "spies": spies_hired
         })
         embed = create_embed("⚔️ Mercenaries Hired!",
-                             f"**{civ['name']}** recruited professional military units!",
+                             f"**{civ['name']}** recruited professional military units.",
                              guilded.Color.orange())
         embed.add_field(name="Forces Recruited",
-                        value=f"⚔️ {format_number(mercenaries_hired)} Elite Soldiers\n🕵️ {format_number(spies_hired)} Professional Spies",
+                        value=f"⚔️ {format_number(mercenaries_hired)} Elite Soldiers\n"
+                              f"🕵️ {format_number(spies_hired)} Professional Spies",
                         inline=False)
-        embed.add_field(name="Scaling", value=f"Tech: {tech_mult:.2f}x | Pop: {pop_mult:.2f}x", inline=True)
+        embed.add_field(name="Scaling",
+                        value=f"Tech: {tech_mult:.2f}x | Pop: {pop_factor:.2f}x (capped 2.0x)",
+                        inline=True)
         await ctx.send(embed=embed)
 
     # =================================================================
@@ -642,7 +798,7 @@ class HyperItemCommands(commands.Cog):
         await ctx.send(embed=embed)
 
     # =================================================================
-    # MINT GOLD — POWER-CURVE SCALED
+    # MINT GOLD
     # =================================================================
     @commands.command(name='mintgold')
     async def mint_gold(self, ctx):
@@ -654,23 +810,18 @@ class HyperItemCommands(commands.Cog):
         self.civ_manager.use_hyper_item(user_id, "Gold Mint")
 
         tech_mult = self._tech_mult(civ)
-        pop_mult = self._pop_mult(civ)
-        # Base scales with your PEAK gold, not a fixed number
-        current_gold = civ['resources']['gold']
-        base_gold = 5000 + (current_gold * 0.15)
-        total_gold = int(base_gold * tech_mult * pop_mult)
-        total_gold = min(total_gold, 100_000_000)
-
+        total_gold = min(int(8000 * tech_mult), 5_000_000)
         self.civ_manager.update_resources(user_id, {"gold": total_gold})
         embed = create_embed("🪙 Gold Mint Activated!",
-                             f"**{civ['name']}** has struck it rich with their Gold Mint!",
+                             f"**{civ['name']}** struck a steady payday.",
                              guilded.Color.gold())
-        embed.add_field(name="Gold Generated", value=f"🪙 {format_number(total_gold)} Gold", inline=False)
-        embed.add_field(name="Scaling", value=f"Tech: {tech_mult:.2f}x | Pop: {pop_mult:.2f}x | Base: {format_number(int(base_gold))}", inline=True)
+        embed.add_field(name="Gold Generated", value=f"🪙 {format_number(total_gold)}", inline=False)
+        embed.add_field(name="Tech Mult", value=f"{tech_mult:.2f}x", inline=True)
+        embed.set_footer(text="Linear scaling — no compounding.")
         await ctx.send(embed=embed)
 
     # =================================================================
-    # SUPER HARVEST — POWER-CURVE SCALED
+    # SUPER HARVEST
     # =================================================================
     @commands.command(name='superharvest')
     async def super_harvest(self, ctx):
@@ -682,19 +833,15 @@ class HyperItemCommands(commands.Cog):
         self.civ_manager.use_hyper_item(user_id, "Harvest Engine")
 
         tech_mult = self._tech_mult(civ)
-        pop_mult = self._pop_mult(civ)
-        land = civ['territory']['land_size']
-        base_food = 8000 + int(land * 3)
-        total_food = int(base_food * tech_mult * pop_mult)
-        total_food = min(total_food, 100_000_000)
-
+        total_food = min(int(12000 * tech_mult), 5_000_000)
         self.civ_manager.update_resources(user_id, {"food": total_food})
         self.civ_manager.update_population(user_id, {"happiness": 15, "hunger": -50})
         embed = create_embed("🌾 Super Harvest Complete!",
-                             f"**{civ['name']}**'s Harvest Engine produced a massive bounty!",
+                             f"**{civ['name']}**'s Harvest Engine produced a steady bounty.",
                              guilded.Color.green())
-        embed.add_field(name="Food Produced", value=f"🌾 {format_number(total_food)} Food", inline=True)
-        embed.add_field(name="Effects", value="📈 +15 Happiness\n🍽️ Hunger eliminated", inline=True)
+        embed.add_field(name="Food Produced", value=f"🌾 {format_number(total_food)}", inline=True)
+        embed.add_field(name="Effects", value="📈 +15 Happiness\n🍽️ −50 Hunger", inline=True)
+        embed.set_footer(text="Linear scaling — no compounding.")
         await ctx.send(embed=embed)
 
     # =================================================================
@@ -776,16 +923,11 @@ class HyperItemCommands(commands.Cog):
         await ctx.send(embed=embed)
 
     # =================================================================
-    # BACKSTAB — NERFED, ALLY-FOCUSED
+    # BACKSTAB
     # =================================================================
     @commands.command(name='backstab')
     @app_commands.describe(target="Target civilization leader")
     async def assassination_attempt(self, ctx, target: Optional[guilded.Member] = None):
-        """Dagger assassination. MUCH stronger when target is your ally — this is a betrayal weapon.
-
-        Allied target: 60% gold stolen, happiness forced to 0.
-        Non-ally target: only 10% gold stolen, happiness -30.
-        """
         if not target:
             await ctx.send("🗡️ **Assassination**\nUsage: `.backstab <user>`\nRequires: Dagger\n💀 **Doubles as an ally-killer — much stronger on allies.**")
             return
@@ -829,21 +971,19 @@ class HyperItemCommands(commands.Cog):
             is_allied = self._is_allied(user_id, target_id)
 
             if is_allied:
-                # ---- BETRAYAL: STRONG ----
                 gold_pct = 0.60
                 gold_lost = int(target_civ['resources']['gold'] * gold_pct)
                 current_happiness = target_civ['population']['happiness']
-                happiness_delta = -current_happiness  # force to 0
+                happiness_delta = -current_happiness
                 citizen_loss = int(target_civ['population']['citizens'] * 0.10)
                 soldier_loss = int(target_civ['military']['soldiers'] * 0.20)
                 spy_loss = int(target_civ['military']['spies'] * 0.30)
                 betrayal_text = "\n🗡️ **BETRAYAL!** The victim was your **ally** — the wound cuts deeper."
                 header = "🗡️ Assassination Successful — Betrayal!"
             else:
-                # ---- NORMAL: NERFED ----
                 gold_pct = 0.10
                 gold_lost = int(target_civ['resources']['gold'] * gold_pct)
-                happiness_delta = -30  # just a delta
+                happiness_delta = -30
                 citizen_loss = int(target_civ['population']['citizens'] * 0.03)
                 soldier_loss = int(target_civ['military']['soldiers'] * 0.05)
                 spy_loss = int(target_civ['military']['spies'] * 0.10)
@@ -969,15 +1109,10 @@ class HyperItemCommands(commands.Cog):
             pass
 
     # =================================================================
-    # CLONE — Bio-Replicator
+    # CLONE
     # =================================================================
     @commands.command(name='clone')
     async def bio_replicator(self, ctx):
-        """Use Bio-Replicator. Creates a Shadow Army that mirrors your current military.
-
-        Effect: instantly adds a mirror force equal to 50% of your current soldiers
-        and 40% of your spies. The shadow troops are unstable — costs happiness.
-        """
         user_id = str(ctx.author.id)
         if not self._has_hyperitem(user_id, "Bio-Replicator"):
             await ctx.send("❌ You need a **Bio-Replicator** HyperItem!")
@@ -997,7 +1132,6 @@ class HyperItemCommands(commands.Cog):
             "soldiers": mirror_soldiers,
             "spies": mirror_spies,
         })
-        # Shadow army is unstable — costs morale
         self.civ_manager.update_population(user_id, {"happiness": -15})
 
         embed = create_embed(
@@ -1016,16 +1150,11 @@ class HyperItemCommands(commands.Cog):
         await ctx.send(embed=embed)
 
     # =================================================================
-    # FAKE FLAG — Decoy Banner
+    # FAKE FLAG
     # =================================================================
     @commands.command(name='fakeflag')
     @app_commands.describe(target="The user you want to frame for your next attack")
     async def decoy_banner(self, ctx, target: Optional[guilded.Member] = None):
-        """Use Decoy Banner. Your NEXT attack is attributed to another country.
-
-        Sets a decoy flag on your civ. The next combat action you take will appear
-        to come from the chosen country instead of you.
-        """
         user_id = str(ctx.author.id)
         if not self._has_hyperitem(user_id, "Decoy Banner"):
             await ctx.send("❌ You need a **Decoy Banner** HyperItem!")
@@ -1052,7 +1181,6 @@ class HyperItemCommands(commands.Cog):
 
         self.civ_manager.use_hyper_item(user_id, "Decoy Banner")
 
-        # Persist the flag on the civ
         flags = civ.get('hyperitem_flags', {})
         flags['decoy_banner_attacker'] = target_id
         flags['decoy_banner_attacker_name'] = target_civ['name']
@@ -1069,15 +1197,10 @@ class HyperItemCommands(commands.Cog):
         await ctx.send(embed=embed)
 
     # =================================================================
-    # GLITCH PROTOCOL — Corrupted
+    # GLITCH PROTOCOL
     # =================================================================
     @commands.command(name='glitch_protocol')
     async def glitch_protocol(self, ctx):
-        """Use Corrupted (Glitch Protocol). Randomizes the outcome of the next attack used against you.
-
-        Sets a flag that the next incoming attack will be rerolled via pure RNG —
-        no calculation, no stats, just chaos. Pure 💀📈 terror.
-        """
         user_id = str(ctx.author.id)
         if not self._has_hyperitem(user_id, "Corrupted"):
             await ctx.send("❌ You need a **Corrupted** HyperItem!")

@@ -20,7 +20,6 @@ _init_lock = threading.Lock()
 
 
 def _init_firebase() -> bool:
-    """Initialise Firebase Admin SDK using environment variables (thread‑safe)."""
     with _init_lock:
         try:
             firebase_admin.get_app()
@@ -104,14 +103,12 @@ class Database:
         self.client = firestore.client()
         logger.info("Firestore database ready")
 
-    # ---- Backward compatibility stubs ----
     def get_connection(self):
         pass
 
     def close_connections(self):
         pass
 
-    # ---- Shared ID generator ----
     def _gen_entity_id(self, prefix: str) -> str:
         return f"{prefix}_{random.randint(1000000, 9999999)}"
 
@@ -287,7 +284,6 @@ class Database:
     # UNIONS
     # ================================================================
     def get_union_members(self, user_id: str) -> List[str]:
-        """Return members of the user's union excluding themselves, or []."""
         try:
             civ = self.get_civilization(user_id)
             if not civ:
@@ -952,6 +948,34 @@ class Database:
             return 0
 
     # ================================================================
+    # DAILIES
+    # ================================================================
+    def get_daily_state(self, user_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            doc = self.client.collection("dailies").document(str(user_id)).get()
+            if not doc.exists:
+                return None
+            data = doc.to_dict()
+            for k, v in {
+                "streak": 0, "best_streak": 0, "total_completed": 0,
+                "last_completed_at": None, "grace_tokens": 1,
+                "vacation_until": None, "last_bonus_day": 0,
+            }.items():
+                data.setdefault(k, v)
+            return data
+        except Exception as e:
+            logger.error(f"get_daily_state error: {e}")
+            return None
+
+    def save_daily_state(self, user_id: str, data: Dict[str, Any]) -> bool:
+        try:
+            self.client.collection("dailies").document(str(user_id)).set(data, merge=True)
+            return True
+        except Exception as e:
+            logger.error(f"save_daily_state error: {e}")
+            return False
+
+    # ================================================================
     # INDUSTRIAL REVOLUTION
     # ================================================================
     def get_industrial_revolution(self, user_id: str) -> Optional[Dict[str, Any]]:
@@ -1597,7 +1621,7 @@ class Database:
                 "training", "industrial_revolutions",
                 "alliance_proposals", "trade_proposals",
                 "divisions", "generals", "pending_attacks",
-                "corporations",
+                "corporations", "dailies",
             ]
             for col_name in top_collections:
                 col_data = {}
@@ -1647,7 +1671,7 @@ class Database:
                 "military_tech", "training", "industrial_revolutions",
                 "alliance_proposals", "trade_proposals",
                 "divisions", "generals", "pending_attacks",
-                "corporations",
+                "corporations", "dailies",
             ]
             for col_name in collections:
                 docs = self.client.collection(col_name).stream()

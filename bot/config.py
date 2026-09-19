@@ -838,3 +838,30 @@ CORP_TAKEOVER = {
     "cost_per_level": 100_000,
     "success_rep_ratio": 0.60,
 }
+
+# ================================================================
+# CIVIL WAR
+# ================================================================
+CIVIL_WAR = {
+    # Rebel army strength = soldiers × random(min, max) at war start
+    "rebel_strength_by_cause": {
+        "military": (0.65, 0.85),   # soldiers defect — biggest rebel army
+        "merchant": (0.45, 0.60),   # hired mercenaries — moderate
+        "people":   (0.50, 0.70),   # mass uprising — many volunteers
+    },
+
+    # Initial losses when the war erupts
+    "initial_population_loss_divisor": 10,   # citizens // N
+    "initial_soldier_loss_divisor": 5,       # soldiers // N
+
+    # Battle math
+    "offensive_boost": 1.15,                 # player attack multiplier
+    "rebel_strength_decay_on_win": 0.92,     # rebels weaken when you win
+    "rebel_strength_growth_on_loss": 1.20,   # rebels grow when you lose
+    "player_losses_on_win_range": (0.08, 0.18),
+    "player_losses_on_loss_range": (0.15, 0.30),
+    "rebel_capture_chance_on_player_loss": 0.50,
+
+    # AI
+    "ai_title_model": "poolside/laguna-s-2.1:free",
+}

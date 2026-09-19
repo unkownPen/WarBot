@@ -173,6 +173,9 @@ COOLDOWNS = {
     # Corporations
     "corp": 0, "corp_build": 0,
     "corp_leaderboard": 0, "corp_takeover": 0,
+
+    # Dailies
+    "daily": 0, "streak": 0,
 }
 
 CAPS = {
@@ -843,25 +846,62 @@ CORP_TAKEOVER = {
 # CIVIL WAR
 # ================================================================
 CIVIL_WAR = {
-    # Rebel army strength = soldiers × random(min, max) at war start
     "rebel_strength_by_cause": {
-        "military": (0.65, 0.85),   # soldiers defect — biggest rebel army
-        "merchant": (0.45, 0.60),   # hired mercenaries — moderate
-        "people":   (0.50, 0.70),   # mass uprising — many volunteers
+        "military": (0.65, 0.85),
+        "merchant": (0.45, 0.60),
+        "people":   (0.50, 0.70),
     },
-
-    # Initial losses when the war erupts
-    "initial_population_loss_divisor": 10,   # citizens // N
-    "initial_soldier_loss_divisor": 5,       # soldiers // N
-
-    # Battle math
-    "offensive_boost": 1.15,                 # player attack multiplier
-    "rebel_strength_decay_on_win": 0.92,     # rebels weaken when you win
-    "rebel_strength_growth_on_loss": 1.20,   # rebels grow when you lose
+    "initial_population_loss_divisor": 10,
+    "initial_soldier_loss_divisor": 5,
+    "offensive_boost": 1.15,
+    "rebel_strength_decay_on_win": 0.92,
+    "rebel_strength_growth_on_loss": 1.20,
     "player_losses_on_win_range": (0.08, 0.18),
     "player_losses_on_loss_range": (0.15, 0.30),
     "rebel_capture_chance_on_player_loss": 0.50,
-
-    # AI
     "ai_title_model": "poolside/laguna-s-2.1:free",
+}
+
+# ================================================================
+# DAILIES + STREAKS
+# ================================================================
+DAILY = {
+    "cooldown_hours": 24,
+    "base_gold": 200,
+    "base_food": 100,
+    "max_multiplier": 10.0,
+
+    "milestones": {
+        3:   {"mult": 1.50, "gold": 300,   "label": "🌱 FIRST STEPS"},
+        5:   {"mult": 1.75, "gold": 600,   "label": "🌿 BUILDING"},
+        7:   {"mult": 2.00, "gold": 1500,  "label": "🔥 ONE WEEK STRONG"},
+        10:  {"mult": 2.25, "gold": 3000,  "label": "⚡ DOUBLE DIGITS"},
+        14:  {"mult": 2.50, "gold": 5000,  "label": "💎 TWO WEEKS", "item": "common"},
+        21:  {"mult": 3.00, "gold": 10000, "label": "🚀 THREE WEEKS"},
+        30:  {"mult": 4.00, "gold": 30000, "label": "👑 ONE MONTH", "item": "rare"},
+        45:  {"mult": 5.00, "gold": 60000, "label": "⭐ VETERAN"},
+        60:  {"mult": 6.00, "gold": 100000,"label": "🏆 TWO MONTHS"},
+        90:  {"mult": 8.00, "gold": 250000,"label": "💠 THREE MONTHS"},
+        180: {"mult": 10.00,"gold": 750000,"label": "🌟 HALF YEAR"},
+        365: {"mult": 20.00,"gold": 3000000,"label": "🌌 LEGENDARY YEAR", "item": "legendary"},
+    },
+
+    "gamble_min": 500,
+    "gamble_max": 10000,
+    "gamble_lose_chance": 0.40,
+
+    "item_pools": {
+        "common":    ["Lucky Charm", "Propaganda Kit", "Mercenary Contract"],
+        "rare":      ["Nuclear Warhead", "Dagger", "Missiles"],
+        "legendary": ["HyperLaser", "Tech Core", "Anti-Nuke Shield"],
+    },
+}
+
+# Dopamine tier colors for embed borders
+DOPAMINE_COLORS = {
+    "common": 0x22c55e,   # green
+    "good":   0x3b82f6,   # blue
+    "great":  0xa855f7,   # purple
+    "epic":   0xf59e0b,   # amber
+    "legend": 0xff0080,   # hot pink
 }

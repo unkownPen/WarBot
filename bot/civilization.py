@@ -100,7 +100,6 @@ class CivilizationManager:
             if civ and 'employed' not in civ['population']:
                 civ['population']['employed'] = civ['population']['citizens'] // 2
                 self._update_employment_only(user_id, civ['population']['employed'])
-            # Ensure factions field exists (migration for old civs)
             if civ and 'factions' not in civ:
                 civ['factions'] = {"military": 50, "merchant": 50, "people": 50}
             if civ:
@@ -262,7 +261,7 @@ class CivilizationManager:
             return False
 
     # =================================================================
-    # CIVIL WAR
+    # CIVIL WAR — FACTION-DRIVEN
     # =================================================================
     def check_civil_war_risk(self, user_id: str) -> Optional[Dict[str, Any]]:
         try:
@@ -286,7 +285,7 @@ class CivilizationManager:
 
             owned = self.db.get_player_territories(user_id)
             if len(owned) < 2:
-                return None  # silent — single territory can't split
+                return None  # single territory — silent, cannot split
 
             factions = civ.get('factions', {"military": 50, "merchant": 50, "people": 50})
 
@@ -317,6 +316,7 @@ class CivilizationManager:
     def trigger_civil_war(self, user_id: str, cause: str = "people") -> Optional[Dict[str, Any]]:
         try:
             from bot import config
+            cw_cfg = config.CIVIL_WAR
             civ = self.get_civilization(user_id)
             if not civ:
                 return None
@@ -336,12 +336,14 @@ class CivilizationManager:
             soldiers = civ['military']['soldiers']
             gold = civ['resources']['gold']
 
+            # Rebel strength from config
+            lo, hi = cw_cfg["rebel_strength_by_cause"].get(cause, (0.50, 0.70))
             if cause == "military":
-                rebel_strength = max(15, int(soldiers * random.uniform(0.50, 0.70)))
+                rebel_strength = max(15, int(soldiers * random.uniform(lo, hi)))
             elif cause == "merchant":
-                rebel_strength = max(10, int(soldiers * random.uniform(0.30, 0.45)))
-            else:
-                rebel_strength = max(8, int(soldiers * random.uniform(0.35, 0.50)))
+                rebel_strength = max(10, int(soldiers * random.uniform(lo, hi)))
+            else:  # people
+                rebel_strength = max(8, int(soldiers * random.uniform(lo, hi)))
 
             cw_state = {
                 "active": True,
@@ -360,8 +362,9 @@ class CivilizationManager:
             })
             self._invalidate_civ(user_id)
 
-            population_loss = max(1, civ['population']['citizens'] // 20)
-            soldier_loss = max(1, soldiers // 10)
+            # Initial losses — heavier now
+            population_loss = max(1, civ['population']['citizens'] // cw_cfg["initial_population_loss_divisor"])
+            soldier_loss = max(1, soldiers // cw_cfg["initial_soldier_loss_divisor"])
             self.update_population(user_id, {"citizens": -population_loss, "happiness": -15})
             self.update_military(user_id, {"soldiers": -soldier_loss})
 
@@ -397,7 +400,11 @@ class CivilizationManager:
         return cw if cw.get('active') else None
 
     def fight_civil_war_battle(self, user_id: str, territory: str = None) -> Dict[str, Any]:
+        """Player attacks a rebel-held territory. Offensive boost from config."""
         try:
+            from bot import config
+            cw_cfg = config.CIVIL_WAR
+
             civ = self.get_civilization(user_id)
             if not civ:
                 return {"error": "no_civ"}
@@ -416,7 +423,7 @@ class CivilizationManager:
             if soldiers < 5:
                 return {"error": "not_enough_soldiers", "min": 5}
 
-            OFFENSIVE_BOOST = 1.30
+            OFFENSIVE_BOOST = cw_cfg["offensive_boost"]
             player_power = soldiers * OFFENSIVE_BOOST * random.uniform(0.85, 1.15)
             rebel_power = cw.get('rebel_strength', 50) * random.uniform(0.85, 1.15)
 
@@ -427,13 +434,14 @@ class CivilizationManager:
                 cw['loyalist_territories'] = loyalist
                 cw['rebel_territories'] = rebel_territories
                 cw['player_wins'] = cw.get('player_wins', 0) + 1
-                cw['rebel_strength'] = max(5, int(cw.get('rebel_strength', 50) * 0.85))
+                cw['rebel_strength'] = max(5, int(cw.get('rebel_strength', 50) * cw_cfg["rebel_strength_decay_on_win"]))
 
                 self.db.update_civilization(user_id, {"civil_war": cw})
                 self._invalidate_civ(user_id)
                 self.db.conquer_territory(user_id, None, target)
 
-                losses = max(1, int(soldiers * random.uniform(0.05, 0.12)))
+                lo, hi = cw_cfg["player_losses_on_win_range"]
+                losses = max(1, int(soldiers * random.uniform(lo, hi)))
                 self.update_military(user_id, {"soldiers": -losses})
                 self.update_population(user_id, {"happiness": 5})
 
@@ -454,13 +462,14 @@ class CivilizationManager:
                                   f"Reclaimed {target} from rebels!")
                 return result
             else:
-                losses = max(1, int(soldiers * random.uniform(0.10, 0.20)))
+                lo, hi = cw_cfg["player_losses_on_loss_range"]
+                losses = max(1, int(soldiers * random.uniform(lo, hi)))
                 cw['rebel_wins'] = cw.get('rebel_wins', 0) + 1
-                cw['rebel_strength'] = int(cw.get('rebel_strength', 50) * 1.10)
+                cw['rebel_strength'] = int(cw.get('rebel_strength', 50) * cw_cfg["rebel_strength_growth_on_loss"])
 
                 loyalist = cw.get('loyalist_territories', [])
                 captured = None
-                if len(loyalist) > 1 and random.random() < 0.35:
+                if len(loyalist) > 1 and random.random() < cw_cfg["rebel_capture_chance_on_player_loss"]:
                     captured = random.choice(loyalist)
                     loyalist.remove(captured)
                     cw.setdefault('rebel_territories', []).append(captured)
@@ -583,6 +592,71 @@ class CivilizationManager:
             f"https://image.pollinations.ai/prompt/{encoded}"
             f"?width=1024&height=768&nologo=true&model=flux&seed={random.randint(1, 999999)}"
         )
+
+    def generate_reclamation_title(self, civ_name: str, territory: str,
+                                   state: Dict[str, Any],
+                                   openrouter_key: str = None) -> str:
+        """Generate a dramatic ALL-CAPS title for reclaiming a rebel territory.
+
+        Falls back to a template if AI is unavailable.
+        """
+        fallback = f"THE RECLAMATION OF {territory.upper()}"
+        if not openrouter_key:
+            return fallback
+
+        try:
+            from bot import config as _cfg
+            model = _cfg.CIVIL_WAR.get("ai_title_model", "poolside/laguna-s-2.1:free")
+            cause = state.get("cause", "people")
+            cause_phrase = {
+                "military": "a military coup",
+                "merchant": "a merchant-led rebellion",
+                "people": "a popular uprising",
+            }.get(cause, "a rebellion")
+
+            prompt = (
+                f"Generate a short, dramatic, ALL-CAPS title (maximum 6 words) "
+                f"for a military operation where the nation '{civ_name}' is "
+                f"reclaiming the territory of '{territory}' from {cause_phrase} "
+                f"during a civil war.\n\n"
+                f"Format: THE RECLAMATION OF <TERRITORY>\n"
+                f"Or similar dramatic phrasing.\n\n"
+                f"Rules:\n"
+                f"- Return ONLY the title, no quotes, no period, no markdown\n"
+                f"- All caps\n"
+                f"- Maximum 6 words"
+            )
+
+            resp = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {openrouter_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 40,
+                    "temperature": 0.9,
+                },
+                timeout=30,
+            )
+
+            if resp.status_code != 200:
+                logger.warning(f"AI title failed: {resp.status_code} {resp.text[:150]}")
+                return fallback
+
+            title = resp.json()["choices"][0]["message"]["content"].strip()
+            title = title.strip('"\'').strip(".").strip("!").upper()
+            for bad in ("TITLE:", "OUTPUT:", "RESPONSE:"):
+                if title.startswith(bad):
+                    title = title[len(bad):].strip()
+            if len(title) > 80 or len(title.split()) > 8:
+                return fallback
+            return title or fallback
+        except Exception as e:
+            logger.error(f"generate_reclamation_title error: {e}")
+            return fallback
 
     # =================================================================
     # UPDATERS
@@ -871,7 +945,7 @@ class CivilizationManager:
             return {}
 
     # =================================================================
-    # HAPPINESS EFFECTS — faction drift removed
+    # HAPPINESS EFFECTS
     # =================================================================
     def apply_happiness_effects(self, user_id: str):
         try:
@@ -906,8 +980,6 @@ class CivilizationManager:
                         break
             except Exception:
                 pass
-
-            # NOTE: Faction drift removed — factions only move via explicit actions.
 
             if happiness < 0:
                 severity = abs(happiness)

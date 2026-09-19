@@ -14,11 +14,190 @@ logger = logging.getLogger(__name__)
 
 
 # =====================================================================
-# COG
+# DOPAMINE HELPERS
+# =====================================================================
+BANNER = "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
+FIRE = "🔥"
+
+def _hype_color(tier: str = "good") -> int:
+    return config.DOPAMINE_COLORS.get(tier, 0x6366f1)
+
+def _hype_title(text: str, tier: str = "good") -> str:
+    emoji_map = {
+        "common": "🟢", "good": "🔵", "great": "🟣", "epic": "🟠", "legend": "🟡",
+    }
+    return f"{emoji_map.get(tier, '✨')} **{text}** {emoji_map.get(tier, '✨')}"
+
+
+# =====================================================================
+# DAILY VIEWS
+# =====================================================================
+class DailyMathView(guilded.ui.View):
+    """3 rapid math questions, 30s total."""
+
+    def __init__(self, cog, user_id: int, timeout: float = 30.0):
+        super().__init__(timeout=timeout)
+        self.cog = cog
+        self.user_id = user_id
+        self.questions: List[Tuple[str, int, List[int]]] = []
+        self.current_idx = 0
+        self.correct_count = 0
+        self.done = False
+        self._build_questions()
+        self._rebuild_buttons()
+
+    def _build_questions(self):
+        for _ in range(3):
+            q = self._gen_q()
+            self.questions.append(q)
+
+    def _gen_q(self):
+        kind = random.choice(["add", "sub", "mul"])
+        if kind == "add":
+            a, b = random.randint(20, 99), random.randint(10, 80)
+            ans = a + b
+            return f"{a} + {b}", ans, self._choices(ans)
+        elif kind == "sub":
+            a, b = random.randint(60, 150), random.randint(10, 50)
+            ans = a - b
+            return f"{a} − {b}", ans, self._choices(ans)
+        else:
+            a, b = random.randint(4, 12), random.randint(3, 9)
+            ans = a * b
+            return f"{a} × {b}", ans, self._choices(ans)
+
+    def _choices(self, correct):
+        s = {correct}
+        while len(s) < 4:
+            offset = random.randint(-15, 15)
+            if offset == 0:
+                continue
+            cand = correct + offset
+            if cand > 0:
+                s.add(cand)
+        out = list(s)
+        random.shuffle(out)
+        return out
+
+    def _rebuild_buttons(self):
+        self.clear_items()
+        if self.current_idx >= len(self.questions):
+            return
+        _, correct, choices = self.questions[self.current_idx]
+        for c in choices:
+            btn = guilded.ui.Button(label=str(c), style=guilded.ButtonStyle.primary)
+            btn.callback = self._make_cb(c, correct)
+            self.add_item(btn)
+
+    def _make_cb(self, chosen, correct):
+        async def callback(interaction: guilded.Interaction):
+            if interaction.user.id != self.user_id:
+                await interaction.response.send_message("Not your daily.", ephemeral=True)
+                return
+            if self.done:
+                await interaction.response.send_message("Already finished.", ephemeral=True)
+                return
+            if chosen == correct:
+                self.correct_count += 1
+            self.current_idx += 1
+            if self.current_idx >= len(self.questions):
+                self.done = True
+                self.stop()
+                await interaction.response.edit_message(
+                    content=f"**Finished!** Correct: **{self.correct_count}/3**",
+                    view=None,
+                )
+                return
+            self._rebuild_buttons()
+            q, _, _ = self.questions[self.current_idx]
+            await interaction.response.edit_message(
+                content=f"**Q{self.current_idx + 1}/3:** What is **{q}**?",
+                view=self,
+            )
+        return callback
+
+
+class DailyDecisionView(guilded.ui.View):
+    def __init__(self, cog, user_id: int, choices: List[Dict[str, Any]], timeout: float = 60.0):
+        super().__init__(timeout=timeout)
+        self.cog = cog
+        self.user_id = user_id
+        self.choice_result: Optional[Dict[str, Any]] = None
+        for c in choices:
+            btn = guilded.ui.Button(
+                label=c["label"],
+                emoji=c.get("emoji"),
+                style=guilded.ButtonStyle.primary,
+            )
+            btn.callback = self._make_cb(c)
+            self.add_item(btn)
+
+    def _make_cb(self, choice):
+        async def callback(interaction: guilded.Interaction):
+            if interaction.user.id != self.user_id:
+                await interaction.response.send_message("Not your daily.", ephemeral=True)
+                return
+            if self.choice_result is not None:
+                await interaction.response.send_message("Already chosen.", ephemeral=True)
+                return
+            self.choice_result = choice
+            for item in self.children:
+                item.disabled = True
+            try:
+                await interaction.response.edit_message(view=self)
+            except Exception:
+                pass
+            self.stop()
+        return callback
+
+
+class DailyGambleView(guilded.ui.View):
+    def __init__(self, cog, user_id: int, timeout: float = 60.0):
+        super().__init__(timeout=timeout)
+        self.cog = cog
+        self.user_id = user_id
+        self.rolled = False
+        spin = guilded.ui.Button(label="🎲 SPIN", style=guilded.ButtonStyle.success)
+        spin.callback = self._spin
+        self.add_item(spin)
+        skip = guilded.ui.Button(label="😴 Skip", style=guilded.ButtonStyle.secondary)
+        skip.callback = self._skip
+        self.add_item(skip)
+
+    async def _spin(self, interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("Not your daily.", ephemeral=True)
+            return
+        if self.rolled:
+            await interaction.response.send_message("Already rolled.", ephemeral=True)
+            return
+        self.rolled = True
+        for item in self.children:
+            item.disabled = True
+        try:
+            await interaction.response.edit_message(view=self)
+        except Exception:
+            pass
+        self.stop()
+
+    async def _skip(self, interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("Not your daily.", ephemeral=True)
+            return
+        self.rolled = False
+        for item in self.children:
+            item.disabled = True
+        try:
+            await interaction.response.edit_message(view=self)
+        except Exception:
+            pass
+        self.stop()
+
+
+# =====================================================================
+# MAIN COG
 # =====================================================================
 class CorporationsCog(commands.Cog):
-    """Business management sim. Hourly tick + level/research/contracts/branches."""
-
     def __init__(self, bot):
         self.bot = bot
         self.db = bot.db
@@ -33,7 +212,7 @@ class CorporationsCog(commands.Cog):
             self._tick_task.cancel()
 
     # =================================================================
-    # TICK LOOP
+    # CORP HOURLY TICK
     # =================================================================
     async def _tick_loop(self):
         await self.bot.wait_until_ready()
@@ -58,8 +237,7 @@ class CorporationsCog(commands.Cog):
             except Exception as e:
                 logger.error(f"Corp tick failed for {corp.get('id')}: {e}")
 
-    def _compute_research_bonuses(self, corp: Dict[str, Any]) -> Dict[str, float]:
-        """Return applied bonuses from R&D thresholds."""
+    def _compute_research_bonuses(self, corp):
         rd = float(corp.get("r_and_d", 0))
         out_mult = 1.0
         eff_floor = 0.0
@@ -69,7 +247,6 @@ class CorporationsCog(commands.Cog):
             if rd >= thresh:
                 b = tier.get("bonus", {})
                 if "output_mult" in b:
-                    # tiers stack multiplicatively — take the highest one only
                     out_mult = max(out_mult, b["output_mult"])
                 if "efficiency_floor" in b:
                     eff_floor = max(eff_floor, b["efficiency_floor"])
@@ -84,7 +261,7 @@ class CorporationsCog(commands.Cog):
             "rep_rate": rep_rate,
         }
 
-    def _tick_one_corp(self, corp: Dict[str, Any]):
+    def _tick_one_corp(self, corp):
         owner_id = corp["owner_id"]
         industry = corp.get("industry", "agriculture")
         ind = config.INDUSTRIES.get(industry)
@@ -97,7 +274,6 @@ class CorporationsCog(commands.Cog):
         employees = int(corp.get("employees", 0))
         level = int(corp.get("level", 1))
 
-        # Even with 0 employees the corp decays a little
         if employees <= 0:
             new_eff = max(0, corp.get("efficiency", 100) - 2)
             new_mor = max(0, corp.get("morale", 100) - 3)
@@ -109,27 +285,22 @@ class CorporationsCog(commands.Cog):
             })
             return
 
-        # ---- Random event roll ----
         event = None
         event_effects = {}
         if random.random() < 0.15:
             event = random.choice(config.BUSINESS_EVENTS)
             event_effects = event.get("effect", {})
 
-        # ---- Research bonuses ----
         research = self._compute_research_bonuses(corp)
 
-        # ---- Base multipliers ----
         eff = float(corp.get("efficiency", 100))
         morale = float(corp.get("morale", 100))
         assets = float(corp.get("assets", 0))
         rd = float(corp.get("r_and_d", 0))
 
-        # Efficiency decays 1/tick, morale 0.5/tick
         eff = max(0, eff - 1)
         morale = max(0, morale - 0.5)
 
-        # Apply event effects
         if "efficiency" in event_effects:
             eff = max(0, min(100, eff + event_effects["efficiency"]))
         if "morale" in event_effects:
@@ -137,12 +308,9 @@ class CorporationsCog(commands.Cog):
         if "r_and_d" in event_effects:
             rd = max(0, min(100, rd + event_effects["r_and_d"]))
 
-        # Efficiency floor from research
         eff = max(eff, research["efficiency_floor"])
 
-        # Employee factor: full bonus at 50+ employees
         emp_factor = min(1.0, employees / 50.0)
-
         revenue_mult = float(event_effects.get("revenue_mult", 1.0))
         level_mult = 1 + (level - 1) * config.CORP_LEVEL_REQUIREMENTS["output_bonus_per_level"]
         branches = corp.get("branches") or []
@@ -160,23 +328,16 @@ class CorporationsCog(commands.Cog):
             * research["output_mult"]
         )
 
-        # ---- Inputs / outputs ----
         skip_production = bool(event_effects.get("skip_production"))
-        produced_summary = {}
-        consumed_summary = {}
-
         if not skip_production:
             can_produce = True
             for res, amt in ind.get("consumes", {}).items():
                 if civ["resources"].get(res, 0) < amt:
                     can_produce = False
                     break
-
             if can_produce:
                 for res, amt in ind.get("consumes", {}).items():
                     self.civ_manager.update_resources(owner_id, {res: -amt})
-                    consumed_summary[res] = consumed_summary.get(res, 0) + amt
-
                 for res, amt in ind.get("produces", {}).items():
                     produced = int(amt * production_mult)
                     if produced <= 0:
@@ -185,11 +346,9 @@ class CorporationsCog(commands.Cog):
                         self.civ_manager.update_military(owner_id, {"soldiers": produced})
                     else:
                         self.civ_manager.update_resources(owner_id, {res: produced})
-                    produced_summary[res] = produced_summary.get(res, 0) + produced
             else:
                 eff = max(0, eff - 5)
 
-        # ---- Wages ----
         wage_per_emp = ind.get("base_wage", 2)
         wages = int(employees * wage_per_emp * (1 + (level - 1) * 0.15))
         reserve = int(corp.get("reserve", 0))
@@ -208,7 +367,6 @@ class CorporationsCog(commands.Cog):
                 new_debt = int(corp.get("debt", 0)) + owed
                 morale = max(0, morale - 15)
 
-        # ---- Event gold bonus / penalty ----
         bonus = int(event_effects.get("gold_bonus", 0))
         if bonus:
             if bonus > 0:
@@ -221,7 +379,6 @@ class CorporationsCog(commands.Cog):
                     new_debt += (cost - new_reserve)
                     new_reserve = 0
 
-        # ---- Reputation drift + research rep rate ----
         rep = float(corp.get("reputation", 50))
         rep += research["rep_rate"]
         if rep > 50:
@@ -230,7 +387,6 @@ class CorporationsCog(commands.Cog):
             rep = min(50, rep + 0.5)
         rep = max(0, min(100, rep))
 
-        # ---- Contracts expiry ----
         contracts = list(corp.get("contracts") or [])
         now = datetime.utcnow()
         still_valid = []
@@ -257,15 +413,11 @@ class CorporationsCog(commands.Cog):
         }
         if event:
             update["last_event"] = {"type": event["type"], "name": event["name"], "desc": event["desc"]}
-
-        # Push event history into the corp doc if there was one
-        if event:
             self._push_event(corp, {"type": event["type"], "name": event["name"], "desc": event["desc"]})
 
         self.db.update_corporation(corp["id"], update)
 
-    def _push_event(self, corp: Dict[str, Any], evt: Dict[str, Any]):
-        """Maintain a rolling list of the last 5 events on the corp doc."""
+    def _push_event(self, corp, evt):
         history = list(corp.get("event_history") or [])
         entry = dict(evt)
         entry["at"] = datetime.utcnow().isoformat()
@@ -277,10 +429,9 @@ class CorporationsCog(commands.Cog):
             logger.error(f"_push_event failed for {corp.get('id')}: {e}")
 
     # =================================================================
-    # COMMANDS — main menu + build
+    # CORP COMMANDS
     # =================================================================
-    @commands.group(name="corp", aliases=["corporation", "biz"],
-                    invoke_without_command=True)
+    @commands.group(name="corp", aliases=["biz"], invoke_without_command=True)
     async def corp(self, ctx):
         user_id = str(ctx.author.id)
         civ = self.civ_manager.get_civilization(user_id)
@@ -388,14 +539,6 @@ class CorporationsCog(commands.Cog):
             await ctx.send("❌ Failed to create corporation.")
             return
 
-        # initialize extended fields
-        self.db.update_corporation(corp_id, {
-            "branches": [],
-            "contracts": [],
-            "event_history": [],
-            "research_unlocks": [],
-        })
-
         await ctx.send(embed=create_embed(
             f"{ind['emoji']} {name} Founded",
             f"**{ind['name']}** corporation established in **{location}**.\n\n"
@@ -403,16 +546,12 @@ class CorporationsCog(commands.Cog):
             guilded.Color.green(),
         ))
 
-    # =================================================================
-    # COMMANDS — leaderboard + takeover
-    # =================================================================
     @corp.command(name="leaderboard", aliases=["lb", "top"])
     async def corp_leaderboard(self, ctx):
         corps = self.db.get_all_corporations()
         if not corps:
             await ctx.send("📭 No corporations exist yet.")
             return
-        # sort by reserve
         def score(c):
             return int(c.get("reserve", 0)) + int(c.get("level", 1)) * 50_000
         top = sorted(corps, key=score, reverse=True)[:10]
@@ -432,7 +571,6 @@ class CorporationsCog(commands.Cog):
 
     @corp.command(name="takeover")
     async def corp_takeover(self, ctx, *, target_name: str = None):
-        """Attempt a hostile takeover of another player's corporation."""
         user_id = str(ctx.author.id)
         attacker_civ = self.civ_manager.get_civilization(user_id)
         if not attacker_civ:
@@ -442,7 +580,6 @@ class CorporationsCog(commands.Cog):
             await ctx.send("Usage: `.corp takeover <corp name>`")
             return
 
-        # Find target corp (any owner, exact or substring)
         target_name_lc = target_name.strip().lower()
         all_corps = self.db.get_all_corporations()
         target = None
@@ -463,12 +600,10 @@ class CorporationsCog(commands.Cog):
             await ctx.send(f"❌ No corp matching `{target_name}`.")
             return
 
-        attacker_rep = float(attacker_civ.get("reputation", 50))
-        # Reputation isn't on the civ; use corp reputation of the attacker's best corp
         own_corps = self.db.get_user_corporations(user_id)
+        attacker_rep = 50.0
         if own_corps:
             attacker_rep = max(float(c.get("reputation", 50)) for c in own_corps)
-
         target_rep = float(target.get("reputation", 50))
 
         if attacker_rep < config.CORP_TAKEOVER["min_attacker_rep"]:
@@ -476,24 +611,363 @@ class CorporationsCog(commands.Cog):
                            f"Minimum {config.CORP_TAKEOVER['min_attacker_rep']} required.")
             return
 
-        # Cost
         level = int(target.get("level", 1))
         cost = int(target.get("reserve", 0)) + level * config.CORP_TAKEOVER["cost_per_level"]
         if not self.civ_manager.can_afford(user_id, {"gold": cost}):
             await ctx.send(f"❌ Takeover cost is 🪙 {format_number(cost)} — you can't afford it.")
             return
 
-        # Success chance
         ratio = attacker_rep / max(1.0, attacker_rep + target_rep)
         success = ratio >= config.CORP_TAKEOVER["success_rep_ratio"]
 
-        # Build view
         view = TakeoverView(self, ctx.author.id, target, cost, success)
         await ctx.send(embed=view._make_embed(), view=view)
 
+    # =================================================================
+    # DAILY
+    # =================================================================
+    @commands.command(name="daily", aliases=["d"])
+    async def daily(self, ctx):
+        user_id = str(ctx.author.id)
+        civ = self.civ_manager.get_civilization(user_id)
+        if not civ:
+            await ctx.send("❌ You need a civilization first! Use `.start <name>`")
+            return
+
+        state = self.db.get_daily_state(user_id) or {}
+
+        # --- Cooldown check ---
+        last = state.get("last_completed_at")
+        if last:
+            try:
+                last_dt = datetime.fromisoformat(last)
+                ready_at = last_dt + timedelta(hours=config.DAILY["cooldown_hours"])
+                if datetime.utcnow() < ready_at:
+                    remaining = ready_at - datetime.utcnow()
+                    hrs = int(remaining.total_seconds() // 3600)
+                    mins = int((remaining.total_seconds() % 3600) // 60)
+                    streak = state.get("streak", 0)
+                    embed = guilded.Embed(
+                        title=_hype_title("DAILY COOLDOWN", "good"),
+                        description=(
+                            f"{BANNER}\n"
+                            f"🔥 Streak: **{streak}** days\n"
+                            f"⏰ Next daily in: **{hrs}h {mins}m**\n"
+                            f"{BANNER}\n\n"
+                            f"*Come back tomorrow, President.*"
+                        ),
+                        color=_hype_color("good"),
+                    )
+                    await ctx.send(embed=embed)
+                    return
+            except Exception:
+                pass
+
+        # --- Roll a challenge ---
+        challenge = random.choice(["math", "decision", "gamble"])
+        streak = int(state.get("streak", 0))
+        next_streak = streak + 1
+        milestone = config.DAILY["milestones"].get(next_streak)
+
+        # Preview the challenge
+        if challenge == "math":
+            embed = guilded.Embed(
+                title=_hype_title("DAILY: MATH SPRINT 🧮", "great"),
+                description=(
+                    f"{BANNER}\n"
+                    f"🔥 Streak: **{streak}** → **{next_streak}**\n"
+                    f"🎯 **3 questions** · **30 seconds**\n"
+                    f"⚡ *Answer fast, answer right.*\n"
+                    f"{BANNER}"
+                ),
+                color=_hype_color("great"),
+            )
+            await ctx.send(embed=embed)
+            view = DailyMathView(self, ctx.author.id, timeout=30.0)
+            q, _, _ = view.questions[0]
+            msg = await ctx.send(f"**Q1/3:** What is **{q}**?", view=view)
+            await view.wait()
+            # Grade
+            passed = view.correct_count >= 2
+            await self._complete_daily(
+                ctx, user_id, civ, passed,
+                detail=f"Correct: **{view.correct_count}/3**",
+            )
+            return
+
+        if challenge == "decision":
+            scenario, choices = self._roll_decision()
+            embed = guilded.Embed(
+                title=_hype_title("DAILY: DECISION 🎯", "great"),
+                description=(
+                    f"{BANNER}\n"
+                    f"🔥 Streak: **{streak}** → **{next_streak}**\n"
+                    f"{BANNER}\n\n"
+                    f"**{scenario}**\n\n"
+                    f"*There's no wrong answer — only consequences.*"
+                ),
+                color=_hype_color("great"),
+            )
+            view = DailyDecisionView(self, ctx.author.id, choices)
+            await ctx.send(embed=embed, view=view)
+            await view.wait()
+            if view.choice_result is None:
+                await ctx.send("⏰ Timed out. Try again next time.")
+                return
+            await self._apply_decision(user_id, view.choice_result)
+            await self._complete_daily(
+                ctx, user_id, civ, True,
+                detail=f"Chose: **{view.choice_result['label']}**",
+            )
+            return
+
+        # gamble
+        embed = guilded.Embed(
+            title=_hype_title("DAILY: HIGH STAKES GAMBLE 🎲", "epic"),
+            description=(
+                f"{BANNER}\n"
+                f"🔥 Streak: **{streak}** → **{next_streak}**\n"
+                f"{BANNER}\n\n"
+                f"🎰 **Free spin.** Win **1k–10k gold** or nothing.\n"
+                f"💸 *No cost to you either way.*"
+            ),
+            color=_hype_color("epic"),
+        )
+        view = DailyGambleView(self, ctx.author.id)
+        await ctx.send(embed=embed, view=view)
+        await view.wait()
+
+        win_amount = 0
+        if view.rolled:
+            if random.random() < (1 - config.DAILY["gamble_lose_chance"]):
+                win_amount = random.randint(config.DAILY["gamble_min"], config.DAILY["gamble_max"])
+                self.civ_manager.update_resources(user_id, {"gold": win_amount})
+
+        await self._complete_daily(
+            ctx, user_id, civ, True,
+            detail=f"🎲 Won: **{format_number(win_amount)} gold**" if win_amount else "💀 Nothing this time.",
+            extra_gold=win_amount,
+        )
+
+    # ---------------------------------------------------------------
+    def _roll_decision(self):
+        pool = [
+            ("Your merchants offer a deal.", [
+                {"label": "Take 5,000 gold", "emoji": "💰", "effect": {"gold": 5000}},
+                {"label": "+3 Merchant faction", "emoji": "🪙", "effect": {"faction": ("merchant", 3)}},
+            ]),
+            ("Your military demands more recruits.", [
+                {"label": "Give 20 soldiers", "emoji": "⚔️", "effect": {"soldiers": 20}},
+                {"label": "Refuse", "emoji": "🚫", "effect": {"faction": ("military", -3), "happiness": 5}},
+            ]),
+            ("A neighboring nation sends a gift.", [
+                {"label": "Accept gold", "emoji": "🪙", "effect": {"gold": 3000}},
+                {"label": "Accept food", "emoji": "🌾", "effect": {"food": 2000}},
+                {"label": "Refuse politely", "emoji": "🤝", "effect": {"faction": ("merchant", 2)}},
+            ]),
+            ("Your citizens ask for a festival.", [
+                {"label": "Fund it (−2,000g)", "emoji": "🎉", "effect": {"gold": -2000, "happiness": 10}},
+                {"label": "Deny it", "emoji": "🚫", "effect": {"happiness": -5}},
+            ]),
+        ]
+        return random.choice(pool)
+
+    async def _apply_decision(self, user_id: str, choice: Dict[str, Any]):
+        try:
+            eff = choice.get("effect", {})
+            for k, v in eff.items():
+                if k == "gold":
+                    self.civ_manager.update_resources(user_id, {"gold": v})
+                elif k == "food":
+                    self.civ_manager.update_resources(user_id, {"food": v})
+                elif k == "soldiers":
+                    self.civ_manager.update_military(user_id, {"soldiers": v})
+                elif k == "happiness":
+                    self.civ_manager.update_population(user_id, {"happiness": v})
+                elif k == "faction":
+                    fname, delta = v
+                    self.civ_manager.update_faction(user_id, fname, delta)
+        except Exception as e:
+            logger.error(f"decision apply failed: {e}")
+
+    # ---------------------------------------------------------------
+    def _streak_reward(self, streak: int) -> Dict[str, Any]:
+        base_gold = config.DAILY["base_gold"]
+        base_food = config.DAILY["base_food"]
+        mult = 1.0
+        bonus_gold = 0
+        bonus_item = None
+        milestone_label = None
+
+        # Find the highest milestone ≤ streak
+        for day in sorted(config.DAILY["milestones"].keys()):
+            if streak >= day:
+                m = config.DAILY["milestones"][day]
+                mult = m["mult"]
+                milestone_label = m.get("label")
+                # Exact-hit bonus only lands on the exact day
+                if streak == day:
+                    bonus_gold = m.get("gold", 0)
+                    bonus_item = m.get("item")
+
+        mult = min(mult, config.DAILY["max_multiplier"])
+        gold = int(base_gold * mult) + bonus_gold
+        food = int(base_food * mult)
+        return {
+            "gold": gold,
+            "food": food,
+            "mult": mult,
+            "bonus_gold": bonus_gold,
+            "bonus_item": bonus_item,
+            "milestone_label": milestone_label,
+        }
+
+    async def _complete_daily(self, ctx, user_id: str, civ: Dict[str, Any],
+                              passed: bool, detail: str = "", extra_gold: int = 0):
+        state = self.db.get_daily_state(user_id) or {}
+        streak = int(state.get("streak", 0))
+        best = int(state.get("best_streak", 0))
+        total = int(state.get("total_completed", 0))
+
+        if not passed:
+            # Fail → reset streak
+            state["streak"] = 0
+            state["last_completed_at"] = datetime.utcnow().isoformat()
+            self.db.save_daily_state(user_id, state)
+            embed = guilded.Embed(
+                title=_hype_title("DAILY FAILED 💀", "common"),
+                description=(
+                    f"{BANNER}\n"
+                    f"{detail}\n\n"
+                    f"🔥 Streak reset: **{streak} → 0**\n"
+                    f"*You'll get 'em tomorrow, President.*"
+                ),
+                color=_hype_color("common"),
+            )
+            await ctx.send(embed=embed)
+            return
+
+        new_streak = streak + 1
+        best = max(best, new_streak)
+        total += 1
+
+        reward = self._streak_reward(new_streak)
+        total_gold = reward["gold"] + extra_gold
+        total_food = reward["food"]
+
+        self.civ_manager.update_resources(user_id, {"gold": total_gold, "food": total_food})
+
+        item_line = ""
+        if reward["bonus_item"]:
+            pool = config.DAILY["item_pools"].get(reward["bonus_item"], [])
+            if pool:
+                chosen_item = random.choice(pool)
+                self.civ_manager.add_hyper_item(user_id, chosen_item)
+                item_line = f"\n🎁 **BONUS ITEM:** *{chosen_item}*"
+
+        state["streak"] = new_streak
+        state["best_streak"] = best
+        state["total_completed"] = total
+        state["last_completed_at"] = datetime.utcnow().isoformat()
+        self.db.save_daily_state(user_id, state)
+
+        # Pick a dopamine color
+        if new_streak >= 100:
+            tier = "legend"
+        elif new_streak >= 30:
+            tier = "epic"
+        elif new_streak >= 7:
+            tier = "great"
+        elif new_streak >= 3:
+            tier = "good"
+        else:
+            tier = "common"
+
+        milestone_line = ""
+        if reward["milestone_label"]:
+            milestone_line = f"\n\n🎊 **{reward['milestone_label']}**"
+
+        embed = guilded.Embed(
+            title=_hype_title(f"{FIRE} DAILY COMPLETE {FIRE}", tier),
+            description=(
+                f"{BANNER}\n"
+                f"🔥 **Streak:** `{streak}` → **`{new_streak}`**  "
+                f"*(best: {best})*\n"
+                f"⚡ **Multiplier:** ×**{reward['mult']:.2f}**\n"
+                f"{BANNER}\n"
+                f"💰 **Gold:** +{format_number(total_gold)}\n"
+                f"🌾 **Food:** +{format_number(total_food)}"
+                f"{item_line}"
+                f"{milestone_line}\n\n"
+                f"*{detail}*"
+            ),
+            color=_hype_color(tier),
+        )
+        embed.set_footer(text=f"Total completed: {total} days")
+        await ctx.send(embed=embed)
+
+    @commands.command(name="streak", aliases=["mystreak"])
+    async def streak_info(self, ctx):
+        user_id = str(ctx.author.id)
+        state = self.db.get_daily_state(user_id) or {}
+        streak = int(state.get("streak", 0))
+        best = int(state.get("best_streak", 0))
+        total = int(state.get("total_completed", 0))
+        last = state.get("last_completed_at")
+
+        embed = guilded.Embed(
+            title=_hype_title("YOUR STREAK", "great"),
+            description=f"{BANNER}\n"
+                        f"🔥 **Current:** `{streak}` days\n"
+                        f"🏆 **Best:** `{best}` days\n"
+                        f"📊 **Total:** `{total}` days\n"
+                        f"{BANNER}",
+            color=_hype_color("great"),
+        )
+
+        if last:
+            try:
+                last_dt = datetime.fromisoformat(last)
+                ready_at = last_dt + timedelta(hours=config.DAILY["cooldown_hours"])
+                if datetime.utcnow() < ready_at:
+                    remaining = ready_at - datetime.utcnow()
+                    hrs = int(remaining.total_seconds() // 3600)
+                    mins = int((remaining.total_seconds() % 3600) // 60)
+                    embed.add_field(
+                        name="⏰ Next daily",
+                        value=f"**{hrs}h {mins}m**",
+                        inline=False,
+                    )
+                else:
+                    embed.add_field(
+                        name="✅ Daily ready",
+                        value="Use `.daily` to claim it!",
+                        inline=False,
+                    )
+            except Exception:
+                pass
+
+        # Show next milestone
+        next_ms = None
+        for day in sorted(config.DAILY["milestones"].keys()):
+            if day > streak:
+                next_ms = day
+                break
+        if next_ms:
+            m = config.DAILY["milestones"][next_ms]
+            embed.add_field(
+                name=f"🎯 Next milestone — Day {next_ms}",
+                value=f"**{m.get('label','—')}** · ×{m['mult']:.2f} multiplier + "
+                      f"🪙 {format_number(m['gold'])}"
+                      + (f" + *{m['item']}* item" if m.get("item") else ""),
+                inline=False,
+            )
+
+        await ctx.send(embed=embed)
+
 
 # =====================================================================
-# VIEWS
+# CORP VIEWS (unchanged from before)
 # =====================================================================
 class CorpMainMenuView(guilded.ui.View):
     def __init__(self, cog, user_id, corps, timeout=180):
@@ -522,7 +996,7 @@ class CorpMainMenuView(guilded.ui.View):
             build_btn.callback = self._build
             self.add_item(build_btn)
 
-    async def _build(self, interaction: guilded.Interaction):
+    async def _build(self, interaction):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("Not your menu.", ephemeral=True)
             return
@@ -532,7 +1006,7 @@ class CorpMainMenuView(guilded.ui.View):
         )
 
     def _make_manage(self, corp_id):
-        async def callback(interaction: guilded.Interaction):
+        async def callback(interaction):
             if interaction.user.id != self.user_id:
                 await interaction.response.send_message("Not your menu.", ephemeral=True)
                 return
@@ -556,22 +1030,15 @@ class CorpManageView(guilded.ui.View):
         self.user_id = user_id
         self.corp_id = corp_id
 
-        # Row 0
         self._add("Staff", "👥", self._staff)
         self._add("Assets", "🏗️", lambda i: self._buy_stat(i, "assets"))
         self._add("Marketing", "📈", lambda i: self._buy_stat(i, "marketing"))
-
-        # Row 1
         self._add("R&D", "🔬", lambda i: self._buy_stat(i, "r_and_d"))
         self._add("Research", "🧬", self._research)
         self._add("Branches", "🌍", self._branches)
-
-        # Row 2
         self._add("Contracts", "📜", self._contracts)
         self._add("Log", "🗒️", self._log)
         self._add("Level Up", "⬆️", self._level)
-
-        # Row 3
         self._add("Finance", "💰", self._finance, style=guilded.ButtonStyle.success)
         self._add("Sell", "📤", self._sell, style=guilded.ButtonStyle.danger)
 
@@ -587,7 +1054,6 @@ class CorpManageView(guilded.ui.View):
         if evt:
             icon = "🎉" if evt.get("type") == "positive" else ("⚠️" if evt.get("type") == "negative" else "ℹ️")
             evt_line = f"\n\n**Last event:** {icon} {evt['name']} — {evt['desc']}"
-        research = self.cog._compute_research_bonuses(corp)
         branches = len(corp.get("branches") or [])
         contracts = len(corp.get("contracts") or [])
         embed = create_embed(
@@ -608,7 +1074,6 @@ class CorpManageView(guilded.ui.View):
         )
         return embed
 
-    # ---- sub-view openers ----
     async def _staff(self, interaction):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("Not yours.", ephemeral=True)
@@ -774,9 +1239,6 @@ class CorpManageView(guilded.ui.View):
         )
 
 
-# =====================================================================
-# STAFF
-# =====================================================================
 class StaffSubView(guilded.ui.View):
     def __init__(self, cog, user_id, corp_id, timeout=180):
         super().__init__(timeout=timeout)
@@ -804,7 +1266,7 @@ class StaffSubView(guilded.ui.View):
         )
 
     def _make_hire(self, amount):
-        async def callback(interaction: guilded.Interaction):
+        async def callback(interaction):
             if interaction.user.id != self.user_id:
                 await interaction.response.send_message("Not yours.", ephemeral=True)
                 return
@@ -830,7 +1292,7 @@ class StaffSubView(guilded.ui.View):
             )
         return callback
 
-    async def _fire_all(self, interaction: guilded.Interaction):
+    async def _fire_all(self, interaction):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("Not yours.", ephemeral=True)
             return
@@ -845,9 +1307,6 @@ class StaffSubView(guilded.ui.View):
         )
 
 
-# =====================================================================
-# BRANCHES
-# =====================================================================
 class BranchesView(guilded.ui.View):
     def __init__(self, cog, user_id, corp_id, timeout=180):
         super().__init__(timeout=timeout)
@@ -877,7 +1336,7 @@ class BranchesView(guilded.ui.View):
             guilded.Color.dark_green(),
         )
 
-    async def _add_branch(self, interaction: guilded.Interaction):
+    async def _add_branch(self, interaction):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("Not yours.", ephemeral=True)
             return
@@ -911,7 +1370,7 @@ class BranchesView(guilded.ui.View):
             ephemeral=True,
         )
 
-    async def _close_branch(self, interaction: guilded.Interaction):
+    async def _close_branch(self, interaction):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("Not yours.", ephemeral=True)
             return
@@ -927,9 +1386,6 @@ class BranchesView(guilded.ui.View):
         )
 
 
-# =====================================================================
-# CONTRACTS
-# =====================================================================
 class ContractsView(guilded.ui.View):
     def __init__(self, cog, user_id, corp_id, timeout=300):
         super().__init__(timeout=timeout)
@@ -975,7 +1431,7 @@ class ContractsView(guilded.ui.View):
                 )
         return embed
 
-    async def _accept(self, interaction: guilded.Interaction):
+    async def _accept(self, interaction):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("Not yours.", ephemeral=True)
             return
@@ -1001,7 +1457,7 @@ class ContractsView(guilded.ui.View):
             ephemeral=True,
         )
 
-    async def _fulfill_first(self, interaction: guilded.Interaction):
+    async def _fulfill_first(self, interaction):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("Not yours.", ephemeral=True)
             return
@@ -1014,7 +1470,6 @@ class ContractsView(guilded.ui.View):
         res = c["resource"]
         amt = int(c["amount"])
 
-        # Check availability
         if res == "soldiers":
             civ = self.cog.civ_manager.get_civilization(self.user_id)
             if civ["military"]["soldiers"] < amt:
@@ -1032,7 +1487,6 @@ class ContractsView(guilded.ui.View):
             self.cog.civ_manager.spend_resources(self.user_id, {res: amt})
 
         active.pop(0)
-        # Add reward to corp reserve
         reserve = int(corp.get("reserve", 0)) + int(c["reward_gold"])
         rep = min(100, float(corp.get("reputation", 50)) + int(c.get("reward_rep", 0)))
         self.cog.db.update_corporation(self.corp_id, {
@@ -1047,7 +1501,7 @@ class ContractsView(guilded.ui.View):
             ephemeral=True,
         )
 
-    async def _cancel_first(self, interaction: guilded.Interaction):
+    async def _cancel_first(self, interaction):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("Not yours.", ephemeral=True)
             return
@@ -1064,9 +1518,6 @@ class ContractsView(guilded.ui.View):
         )
 
 
-# =====================================================================
-# LEVEL UP
-# =====================================================================
 class LevelUpView(guilded.ui.View):
     def __init__(self, cog, user_id, corp_id, timeout=180):
         super().__init__(timeout=timeout)
@@ -1096,7 +1547,7 @@ class LevelUpView(guilded.ui.View):
             guilded.Color.dark_teal(),
         )
 
-    async def _upgrade(self, interaction: guilded.Interaction):
+    async def _upgrade(self, interaction):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("Not yours.", ephemeral=True)
             return
@@ -1116,9 +1567,6 @@ class LevelUpView(guilded.ui.View):
         await interaction.response.send_message(f"⬆️ Level **{level} → {level+1}**!", ephemeral=True)
 
 
-# =====================================================================
-# SELL
-# =====================================================================
 class ConfirmSellView(guilded.ui.View):
     def __init__(self, cog, user_id, corp_id, sale_value, timeout=60):
         super().__init__(timeout=timeout)
@@ -1135,7 +1583,7 @@ class ConfirmSellView(guilded.ui.View):
         cancel.callback = self._cancel
         self.add_item(cancel)
 
-    async def _confirm(self, interaction: guilded.Interaction):
+    async def _confirm(self, interaction):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("Not yours.", ephemeral=True)
             return
@@ -1152,7 +1600,7 @@ class ConfirmSellView(guilded.ui.View):
             view=self,
         )
 
-    async def _cancel(self, interaction: guilded.Interaction):
+    async def _cancel(self, interaction):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("Not yours.", ephemeral=True)
             return
@@ -1161,9 +1609,6 @@ class ConfirmSellView(guilded.ui.View):
         await interaction.response.edit_message(content="❌ Cancelled.", view=self)
 
 
-# =====================================================================
-# TAKEOVER
-# =====================================================================
 class TakeoverView(guilded.ui.View):
     def __init__(self, cog, user_id, target_corp, cost, guaranteed, timeout=120):
         super().__init__(timeout=timeout)
@@ -1195,7 +1640,7 @@ class TakeoverView(guilded.ui.View):
             guilded.Color.dark_red(),
         )
 
-    async def _attempt(self, interaction: guilded.Interaction):
+    async def _attempt(self, interaction):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("Not yours.", ephemeral=True)
             return
@@ -1204,7 +1649,6 @@ class TakeoverView(guilded.ui.View):
             return
         self.attempted = True
 
-        # Re-verify corp still exists and belongs to someone else
         target = self.cog.db.get_corporation(self.target["id"])
         if not target or str(target.get("owner_id")) == self.user_id:
             await interaction.response.send_message("Corp no longer available.", ephemeral=True)
@@ -1216,7 +1660,6 @@ class TakeoverView(guilded.ui.View):
 
         self.cog.civ_manager.spend_resources(self.user_id, {"gold": self.cost})
 
-        # Guaranteed success path — attacker rep was >= threshold
         success = self.guaranteed
         if not self.guaranteed and random.random() < 0.40:
             success = True
@@ -1227,9 +1670,7 @@ class TakeoverView(guilded.ui.View):
                 "owner_id": str(self.user_id),
                 "reputation": max(0, int(target.get("reputation", 50)) - 10),
             })
-            # notify old owner
             try:
-                old_civ = self.cog.civ_manager.get_civilization(old_owner)
                 old_user = await self.cog.bot.fetch_user(int(old_owner))
                 await old_user.send(
                     f"⚔️ **You lost a corporation!** **{target['name']}** was taken over by another player."
@@ -1244,7 +1685,6 @@ class TakeoverView(guilded.ui.View):
                 view=self,
             )
         else:
-            # Refund half
             refund = self.cost // 2
             self.cog.civ_manager.update_resources(self.user_id, {"gold": refund})
             for item in self.children:
@@ -1255,7 +1695,7 @@ class TakeoverView(guilded.ui.View):
                 view=self,
             )
 
-    async def _cancel(self, interaction: guilded.Interaction):
+    async def _cancel(self, interaction):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("Not yours.", ephemeral=True)
             return

@@ -1,3 +1,4 @@
+import os
 import random
 import re
 import json
@@ -7,13 +8,35 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Tuple
 
+import aiohttp
 import discord as guilded
 from discord.ext import commands
 
 from bot.utils import format_number, create_embed
 from bot import config
 
+# Territory data (for province capture)
+try:
+    from bot.commands.territory import (
+        PROVINCE_AREAS, PROVINCE_TO_SUBREGION, SUBREGION_DATA,
+    )
+except Exception:
+    PROVINCE_AREAS = {}
+    PROVINCE_TO_SUBREGION = {}
+    SUBREGION_DATA = {}
+
 logger = logging.getLogger(__name__)
+
+# =====================================================================
+# AI KEYS + ENDPOINTS
+# =====================================================================
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+OPENROUTER_KEY = os.getenv("OPENROUTER")
+
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+AI_MODEL_PRIMARY = "openai/gpt-oss-20b"
+AI_MODEL_FALLBACK = "meta-llama/llama-3.3-70b-instruct"
 
 # ---- CONSTANTS ----
 SHIP_TYPES = {
@@ -38,7 +61,62 @@ MAX_BOOSTED_SOLDIERS = 1000
 SPY_BUY_COST = 50
 DEFAULT_STEALTH_TIMER = 8.0
 
-# Symbol per role branch (used on maps + embeds)
+# =====================================================================
+# BANK RAID TUNABLES — skill-driven, no cooldown
+# =====================================================================
+BANKRAID = {
+    "min_spies": 25,
+    "min_tech": 3,
+    "min_target_deposits": 10_000,
+    "min_steal_fraction": 0.05,
+    "max_steal_fraction": 0.20,
+    "max_steal_absolute": 10_000_000,
+    "spy_loss_on_fail_min": 0.10,
+    "spy_loss_on_fail_max": 0.45,
+    "spy_loss_on_partial_min": 0.02,
+    "spy_loss_on_partial_max": 0.15,
+    "detection_sanction_hours": 12,
+    # AI-rated plan is the *main* driver — stat modifiers are secondary.
+    "ai_weight": 0.75,
+    "stat_weight": 0.25,
+    "min_success": 0.02,
+    "max_success": 0.90,
+}
+
+# =====================================================================
+# PROVINCE CAPTURE TUNABLES
+# =====================================================================
+PROVINCE_CAPTURE = {
+    "enabled": True,
+    # No cap. No last-province protection. Defender can be fully conquered.
+    "ratio_thresholds": [(6.0, 5), (4.5, 4), (3.0, 3), (2.0, 2), (1.0, 1)],
+    "exploitation_bonus": {
+        "pursue": 1, "encircle": 2,
+        "consolidate": 0, "fortify": 0, "withdraw": -99,
+    },
+    # ---- Per-province resistance roll ----
+    "base_capture_chance": 0.65,
+    "defender_doctrine_defense_bonus": {
+        "defense_in_depth":   -0.20,
+        "superior_firepower": -0.10,
+        "grand_battleplan":   -0.05,
+        "mobile_warfare":     -0.05,
+        "mass_assault":        0.00,
+        "asymmetric":          0.05,
+    },
+    "defender_border_bonus": -0.15,
+    "big_ratio_bonus": 0.15,
+    "huge_ratio_bonus": 0.25,
+    "province_size_penalty": {
+        "huge_area_threshold": 2_000_000,
+        "large_area_threshold": 1_000_000,
+        "huge_penalty": -0.15,
+        "large_penalty": -0.08,
+    },
+    "min_chance": 0.15,
+    "max_chance": 0.95,
+}
+
 ROLE_BRANCH_SYMBOLS = {
     "infantry":   "o",
     "armor":      "s",
@@ -107,6 +185,65 @@ def _generate_stealth_question() -> Tuple[str, int, List[int]]:
 
 
 # =====================================================================
+# AI STRATEGY MODAL — tactic panel free-text rating
+# =====================================================================
+class AITacticModal(guilded.ui.Modal, title="Describe Your Battle Plan"):
+    def __init__(self, parent_panel):
+        super().__init__()
+        self.parent_panel = parent_panel
+        self.plan_input = guilded.ui.TextInput(
+            label="Your tactical plan",
+            style=guilded.TextStyle.paragraph,
+            placeholder="e.g. Feint on the left flank, mass breakthrough armor through the "
+                        "center at dawn, exploit with paratroopers on the enemy supply depots.",
+            min_length=20,
+            max_length=500,
+            required=True,
+        )
+        self.add_item(self.plan_input)
+
+    async def on_submit(self, interaction: guilded.Interaction):
+        if interaction.user.id != self.parent_panel.user_id:
+            await interaction.response.send_message("Not your panel.", ephemeral=True)
+            return
+        plan_text = str(self.plan_input.value).strip()
+        await interaction.response.defer(ephemeral=True)
+
+        rating = await self.parent_panel.cog._ai_rate_tactic(
+            plan_text,
+            self.parent_panel._build_ai_context(),
+        )
+        if rating is None:
+            await interaction.followup.send(
+                "⚠️ AI unavailable. Falling back to a neutral +0% plan rating.",
+                ephemeral=True,
+            )
+            self.parent_panel.ai_plan_score = 0.5
+            self.parent_panel.ai_plan_text = plan_text
+            self.parent_panel.ai_plan_notes = "AI unavailable."
+            return
+
+        self.parent_panel.ai_plan_score = float(rating.get("score", 0.5))
+        self.parent_panel.ai_plan_text = plan_text
+        self.parent_panel.ai_plan_notes = rating.get("reasoning", "")
+
+        bonus_pct = (self.parent_panel.ai_plan_score - 0.5) * 50  # +/− 25%
+        verdict = rating.get("verdict", "—")
+        await interaction.followup.send(
+            embed=create_embed(
+                "🧠 AI Battle Plan Reviewed",
+                f"**Score:** {self.parent_panel.ai_plan_score*100:.0f}/100\n"
+                f"**Verdict:** {verdict}\n"
+                f"**Reasoning:** {rating.get('reasoning','—')}\n"
+                f"**Attack modifier:** {bonus_pct:+.1f}%\n\n"
+                f"*Applied when you launch.*",
+                guilded.Color.purple(),
+            ),
+            ephemeral=True,
+        )
+
+
+# =====================================================================
 # MILITARY COMMANDS
 # =====================================================================
 class MilitaryCommands(commands.Cog):
@@ -117,6 +254,7 @@ class MilitaryCommands(commands.Cog):
         self.cooldowns = {}
         self.blockades = {}
         self._blockade_cleanup_task = None
+        self._bankraid_history: Dict[str, Dict[str, str]] = {}
 
     async def cog_load(self):
         self._blockade_cleanup_task = asyncio.create_task(self._cleanup_blockades())
@@ -134,6 +272,162 @@ class MilitaryCommands(commands.Cog):
             for uid in expired:
                 del self.blockades[uid]
                 logger.info(f"Blockade against {uid} expired.")
+
+    # =================================================================
+    # AI HELPERS
+    # =================================================================
+    async def _ai_rate_text(self, system_prompt: str, user_prompt: str,
+                             max_tokens: int = 400, temperature: float = 0.7) -> Optional[str]:
+        """Call Groq (openai/gpt-oss-20b) with OpenRouter fallback.
+
+        Returns the raw assistant text, or None on total failure.
+        """
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        # --- GROQ ---
+        if GROQ_API_KEY:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        GROQ_URL,
+                        headers={
+                            "Authorization": f"Bearer {GROQ_API_KEY}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": AI_MODEL_PRIMARY,
+                            "messages": messages,
+                            "max_tokens": max_tokens,
+                            "temperature": temperature,
+                        },
+                        timeout=30,
+                    ) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            try:
+                                return data["choices"][0]["message"]["content"]
+                            except (KeyError, IndexError):
+                                pass
+                        else:
+                            txt = await resp.text()
+                            logger.warning(f"Groq non-200 ({resp.status}): {txt[:200]}")
+            except Exception as e:
+                logger.warning(f"Groq request failed: {e}")
+
+        # --- OPENROUTER FALLBACK ---
+        if OPENROUTER_KEY:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        OPENROUTER_URL,
+                        headers={
+                            "Authorization": f"Bearer {OPENROUTER_KEY}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": AI_MODEL_FALLBACK,
+                            "messages": messages,
+                            "max_tokens": max_tokens,
+                            "temperature": temperature,
+                        },
+                        timeout=45,
+                    ) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            try:
+                                return data["choices"][0]["message"]["content"]
+                            except (KeyError, IndexError):
+                                pass
+                        else:
+                            txt = await resp.text()
+                            logger.warning(f"OpenRouter non-200 ({resp.status}): {txt[:200]}")
+            except Exception as e:
+                logger.warning(f"OpenRouter request failed: {e}")
+
+        return None
+
+    @staticmethod
+    def _extract_json_block(text: str) -> Optional[Dict[str, Any]]:
+        if not text:
+            return None
+        m = re.search(r"\{.*\}", text, re.DOTALL)
+        if not m:
+            return None
+        try:
+            return json.loads(m.group(0))
+        except Exception:
+            return None
+
+    async def _ai_rate_tactic(self, plan: str, context: str) -> Optional[Dict[str, Any]]:
+        """Rate a battle plan. Returns dict with score (0-1), verdict, reasoning."""
+        system = (
+            "You are a military strategy evaluator for a civilization game. "
+            "Rate the commander's plan strictly and fairly. "
+            "Reward: concentration of force, clear sequencing, exploitation, "
+            "supply awareness, deception, combined arms. "
+            "Penalize: vague goals, contradictions, ignoring enemy strength, "
+            "single-axis thinking. "
+            "Return ONLY valid JSON, no prose."
+        )
+        user = (
+            f"CONTEXT:\n{context}\n\n"
+            f"PLAN:\n\"{plan}\"\n\n"
+            "Return JSON with:\n"
+            "{\n"
+            '  "score": float 0.0-1.0,\n'
+            '  "verdict": "one short sentence",\n'
+            '  "reasoning": "one sentence citing strengths/weaknesses"\n'
+            "}"
+        )
+        raw = await self._ai_rate_text(system, user, max_tokens=220, temperature=0.5)
+        data = self._extract_json_block(raw)
+        if not data:
+            return None
+        try:
+            score = float(data.get("score", 0.5))
+        except Exception:
+            score = 0.5
+        data["score"] = max(0.0, min(1.0, score))
+        return data
+
+    async def _ai_rate_heist(self, plan: str, context: str) -> Optional[Dict[str, Any]]:
+        """Rate a bank heist plan. Higher weight than stats."""
+        system = (
+            "You are a heist planner rating a bank robbery plan for a strategy game. "
+            "Reward: recon, disguises, insider access, staggered entry, emergency exit, "
+            "cover-up, distraction, understanding of vault mechanics. "
+            "Penalize: brute force, no escape plan, leaving witnesses, vague steps. "
+            "Return ONLY valid JSON, no prose."
+        )
+        user = (
+            f"TARGET INTEL:\n{context}\n\n"
+            f"PLAN:\n\"{plan}\"\n\n"
+            "Return JSON with:\n"
+            "{\n"
+            '  "score": float 0.0-1.0,\n'
+            '  "verdict": "one short phrase",\n'
+            '  "reasoning": "one sentence",\n'
+            '  "spy_loss_mult": float 0.5-1.5\n'
+            "}"
+        )
+        raw = await self._ai_rate_text(system, user, max_tokens=220, temperature=0.55)
+        data = self._extract_json_block(raw)
+        if not data:
+            return None
+        try:
+            score = float(data.get("score", 0.5))
+        except Exception:
+            score = 0.5
+        data["score"] = max(0.0, min(1.0, score))
+        try:
+            slm = float(data.get("spy_loss_mult", 1.0))
+        except Exception:
+            slm = 1.0
+        data["spy_loss_mult"] = max(0.4, min(1.6, slm))
+        return data
 
     # =================================================================
     # FIRESTORE / CIV HELPERS
@@ -154,12 +448,6 @@ class MilitaryCommands(commands.Cog):
         return self.db.get_training(user_id)
     def _update_training(self, user_id: str, updates: Dict[str, int]) -> bool:
         return self.db.update_training(user_id, updates)
-
-    def _get_doctrine(self, user_id: str) -> Optional[str]:
-        civ = self.civ_manager.get_civilization(user_id)
-        if not civ:
-            return None
-        return civ.get("doctrine")
 
     def _get_border_info(self, user_id: str) -> Dict[str, Any]:
         doc = self.db.client.collection("borders").document(user_id).get()
@@ -204,14 +492,14 @@ class MilitaryCommands(commands.Cog):
         if not attacker_provinces or not defender_provinces:
             return False
         try:
-            from bot.commands.territory import PROVINCE_TO_SUBREGION, SUBREGION_DATA
+            from bot.commands.territory import PROVINCE_TO_SUBREGION as _P2S, SUBREGION_DATA as _SD
         except Exception:
             return False
-        attacker_subregions = {PROVINCE_TO_SUBREGION.get(p) for p in attacker_provinces if PROVINCE_TO_SUBREGION.get(p)}
-        defender_subregions = {PROVINCE_TO_SUBREGION.get(p) for p in defender_provinces if PROVINCE_TO_SUBREGION.get(p)}
+        attacker_subregions = {_P2S.get(p) for p in attacker_provinces if _P2S.get(p)}
+        defender_subregions = {_P2S.get(p) for p in defender_provinces if _P2S.get(p)}
         for att_sub in attacker_subregions:
             for def_sub in defender_subregions:
-                if def_sub in SUBREGION_DATA.get(att_sub, {}).get("neighbours", []):
+                if def_sub in _SD.get(att_sub, {}).get("neighbours", []):
                     return True
         return False
 
@@ -235,6 +523,18 @@ class MilitaryCommands(commands.Cog):
             return False
         except Exception as e:
             logger.error(f"_is_sanctioned error for {user_id}: {e}")
+            return False
+
+    def _has_hyperitem(self, user_id: str, item_name: str) -> bool:
+        civ = self.civ_manager.get_civilization(user_id)
+        if not civ:
+            return False
+        return item_name in civ.get('hyper_items', [])
+
+    def _consume_hyperitem(self, user_id: str, item_name: str) -> bool:
+        try:
+            return self.civ_manager.use_hyper_item(user_id, item_name)
+        except Exception:
             return False
 
     # =================================================================
@@ -300,6 +600,199 @@ class MilitaryCommands(commands.Cog):
         return 0
 
     # =================================================================
+    # PROVINCE CAPTURE HELPERS
+    # =================================================================
+    def _get_verified_provinces(self, user_id: str) -> List[str]:
+        try:
+            all_territories = self.db.get_all_territories()
+        except Exception:
+            return []
+        owned = []
+        for province_name, data in all_territories.items():
+            if str(data.get("owner_id")) == str(user_id):
+                owned.append(province_name)
+        return owned
+
+    def _is_rebel_held(self, defender_id: str, province: str) -> bool:
+        try:
+            state = self.civ_manager.get_civil_war_state(defender_id)
+            if not state:
+                return False
+            return province in set(state.get("rebel_territories", []) or [])
+        except Exception:
+            return False
+
+    def _sort_provinces_by_adjacency(self, attacker_id: str, provinces: List[str]) -> List[str]:
+        if not provinces:
+            return []
+        attacker_provs = self._get_verified_provinces(attacker_id)
+        attacker_subregions = {
+            PROVINCE_TO_SUBREGION.get(p) for p in attacker_provs
+            if PROVINCE_TO_SUBREGION.get(p)
+        }
+        adjacent_subregions: set = set()
+        for sub in attacker_subregions:
+            for nb in SUBREGION_DATA.get(sub, {}).get("neighbours", []):
+                adjacent_subregions.add(nb)
+
+        tier1, tier2, tier3 = [], [], []
+        for prov in provinces:
+            sub = PROVINCE_TO_SUBREGION.get(prov)
+            if sub in attacker_subregions:
+                tier1.append(prov)
+            elif sub in adjacent_subregions:
+                tier2.append(prov)
+            else:
+                tier3.append(prov)
+
+        random.shuffle(tier1); random.shuffle(tier2); random.shuffle(tier3)
+        return tier1 + tier2 + tier3
+
+    def _calculate_capture_count(self, ratio: float, exploitation: Optional[str]) -> int:
+        """How many provinces can the attacker seize this battle? No cap."""
+        if not PROVINCE_CAPTURE["enabled"]:
+            return 0
+        bonus = PROVINCE_CAPTURE["exploitation_bonus"].get(exploitation or "", 0)
+        if bonus < 0:
+            return 0
+
+        base = 0
+        for threshold, count in PROVINCE_CAPTURE["ratio_thresholds"]:
+            if ratio >= threshold:
+                base = count
+                break
+        if base == 0:
+            return 0
+
+        return max(0, base + bonus)
+
+    def _get_capturable_provinces(self, attacker_id: str, defender_id: str) -> List[str]:
+        defender_provs = self._get_verified_provinces(defender_id)
+        if not defender_provs:
+            return []
+        # Civil war: exclude rebel-held provinces
+        defender_provs = [p for p in defender_provs
+                          if not self._is_rebel_held(defender_id, p)]
+        # Exclude anything attacker already owns (paranoia)
+        attacker_owned = set(self._get_verified_provinces(attacker_id))
+        defender_provs = [p for p in defender_provs if p not in attacker_owned]
+        return defender_provs
+
+    def _roll_capture(self, ratio: float, defender_doctrine: Optional[str],
+                      defender_id: str, province: str) -> bool:
+        """Per-province resistance roll."""
+        chance = PROVINCE_CAPTURE["base_capture_chance"]
+        chance += PROVINCE_CAPTURE["defender_doctrine_defense_bonus"].get(
+            defender_doctrine or "", 0.0
+        )
+        border = self._get_border_info(defender_id)
+        if border.get("has_border"):
+            chance += PROVINCE_CAPTURE["defender_border_bonus"]
+        if ratio >= 5.0:
+            chance += PROVINCE_CAPTURE["huge_ratio_bonus"]
+        elif ratio >= 3.0:
+            chance += PROVINCE_CAPTURE["big_ratio_bonus"]
+
+        area = int(PROVINCE_AREAS.get(province, 1000))
+        psp = PROVINCE_CAPTURE["province_size_penalty"]
+        if area >= psp["huge_area_threshold"]:
+            chance += psp["huge_penalty"]
+        elif area >= psp["large_area_threshold"]:
+            chance += psp["large_penalty"]
+
+        chance = max(PROVINCE_CAPTURE["min_chance"],
+                     min(PROVINCE_CAPTURE["max_chance"], chance))
+        return random.random() < chance
+
+    def _transfer_province(self, attacker_id: str, defender_id: str, province: str) -> bool:
+        try:
+            ok = self.db.conquer_territory(attacker_id, defender_id, province)
+            if not ok:
+                return False
+            area = int(PROVINCE_AREAS.get(province, 1000))
+            self.civ_manager.update_territory(attacker_id, {"land_size": area})
+            self.civ_manager.update_territory(defender_id, {"land_size": -area})
+            try:
+                self.civ_manager._invalidate_civ(attacker_id)
+                self.civ_manager._invalidate_civ(defender_id)
+            except Exception:
+                pass
+            return True
+        except Exception as e:
+            logger.error(f"_transfer_province error {province}: {e}")
+            return False
+
+    async def _capture_provinces(self, ctx, attacker_id: str, defender_id: str,
+                                  ratio: float, exploitation: Optional[str],
+                                  attacker_civ: dict, defender_civ: dict) -> List[str]:
+        count = self._calculate_capture_count(ratio, exploitation)
+        if count <= 0:
+            return []
+
+        candidates = self._get_capturable_provinces(attacker_id, defender_id)
+        if not candidates:
+            return []
+
+        candidates = self._sort_provinces_by_adjacency(attacker_id, candidates)
+        targets = candidates[:count]
+        defender_doctrine = defender_civ.get("doctrine")
+
+        captured, resisted = [], []
+        for prov in targets:
+            if self._roll_capture(ratio, defender_doctrine, defender_id, prov):
+                if self._transfer_province(attacker_id, defender_id, prov):
+                    captured.append(prov)
+                else:
+                    resisted.append(prov)
+            else:
+                resisted.append(prov)
+
+        if not captured and not resisted:
+            return []
+
+        embed = create_embed(
+            "🏴 Territory Resolution",
+            f"**{attacker_civ['name']}** vs **{defender_civ['name']}**",
+            guilded.Color.dark_gold() if captured else guilded.Color.dark_red(),
+        )
+        if captured:
+            embed.add_field(
+                name=f"✅ Captured ({len(captured)})",
+                value="\n".join(f"• 🏴 **{p}**" for p in captured),
+                inline=False,
+            )
+        if resisted:
+            embed.add_field(
+                name=f"🛡️ Held by Defender ({len(resisted)})",
+                value="\n".join(f"• **{p}** — garrison held" for p in resisted),
+                inline=False,
+            )
+        embed.set_footer(text=f"Battle ratio ×{ratio:.2f}  ·  Exploitation: {exploitation or 'none'}")
+        await ctx.send(embed=embed)
+
+        if captured:
+            try:
+                self.db.log_event(attacker_id, "province_capture", "Provinces Captured",
+                                  f"Took {', '.join(captured)} from {defender_civ['name']}.")
+                self.db.log_event(defender_id, "province_lost", "Provinces Lost",
+                                  f"Lost {', '.join(captured)} to {attacker_civ['name']}.")
+            except Exception:
+                pass
+            try:
+                tu = await self.bot.fetch_user(int(defender_id))
+                await tu.send(f"🏴 **You lost territory!** {attacker_civ['name']} captured: "
+                              f"{', '.join(captured)}")
+            except Exception:
+                pass
+            try:
+                self.civ_manager.apply_faction_effects(attacker_id, "reclaim_win")
+                self.civ_manager.apply_faction_effects(defender_id, "lost_province")
+            except Exception:
+                pass
+
+        return captured
+
+    # =================================================================
     # CIVIL WAR GATE
     # =================================================================
     async def check_civil_war_and_proceed(self, ctx, user_id: str) -> bool:
@@ -335,17 +828,15 @@ class MilitaryCommands(commands.Cog):
             return True
 
     # =================================================================
-    # DOCTRINE COMMAND
+    # DOCTRINE
     # =================================================================
     @commands.command(name='doctrine')
     async def doctrine_cmd(self, ctx, doctrine_name: str = None):
-        """View or set your operational doctrine (permanent, 5M gold to switch)."""
         user_id = str(ctx.author.id)
         civ = self.civ_manager.get_civilization(user_id)
         if not civ:
             await ctx.send("❌ You need a civilization first!")
             return
-
         current = civ.get("doctrine")
 
         if not doctrine_name:
@@ -374,11 +865,9 @@ class MilitaryCommands(commands.Cog):
         if doctrine_name not in config.DOCTRINES:
             await ctx.send(f"❌ Unknown doctrine. Options: {', '.join(config.DOCTRINES.keys())}")
             return
-
         if current == doctrine_name:
             await ctx.send(f"✅ You already follow **{config.DOCTRINES[current]['name']}**.")
             return
-
         if current is not None:
             cost = config.DOCTRINE_SWITCH_COST
             if not self.civ_manager.can_afford(user_id, {"gold": cost}):
@@ -388,7 +877,6 @@ class MilitaryCommands(commands.Cog):
 
         self.db.update_civilization(user_id, {"doctrine": doctrine_name})
         self.civ_manager._invalidate_civ(user_id)
-
         d = config.DOCTRINES[doctrine_name]
         embed = create_embed(
             f"{d['emoji']} Doctrine Adopted — {d['name']}",
@@ -402,7 +890,7 @@ class MilitaryCommands(commands.Cog):
         await ctx.send(embed=embed)
 
     # =================================================================
-    # DIVISION COMMANDS (role-based)
+    # DIVISIONS
     # =================================================================
     def _division_cap_reached(self, user_id: str) -> bool:
         try:
@@ -420,20 +908,16 @@ class MilitaryCommands(commands.Cog):
 
     @commands.command(name='createdivision', aliases=['cd', 'mkdiv'])
     async def create_division_cmd(self, ctx, role: str = None, size: int = None, *, name: str = None):
-        """Create a division. Role must be allowed by your doctrine."""
         user_id = str(ctx.author.id)
         civ = self.civ_manager.get_civilization(user_id)
         if not civ:
             await ctx.send("❌ You need a civilization first!")
             return
-
         doctrine = civ.get("doctrine")
         if not doctrine:
             await ctx.send("❌ You must pick a doctrine first: `.doctrine <name>`")
             return
-
         allowed = config.DOCTRINES[doctrine]["allowed_roles"]
-
         if not role or size is None or not name:
             role_lines = []
             for k in allowed:
@@ -445,13 +929,9 @@ class MilitaryCommands(commands.Cog):
                 f"**{config.DOCTRINES[doctrine]['name']}**\n"
                 f"Usage: `.createdivision <role> <size> <name>`\n"
                 f"Example: `.createdivision line_infantry 5000 1st Rifles`\n\n"
-                f"**Allowed roles:**\n" + "\n".join(role_lines) +
-                f"\n\n**Limits:** {config.DIVISION_LIMITS['min_size']:,}–"
-                f"{config.DIVISION_LIMITS['max_size']:,} soldiers, "
-                f"max {config.DIVISION_LIMITS['max_per_user']} divisions."
+                f"**Allowed roles:**\n" + "\n".join(role_lines)
             )
             return
-
         role = role.lower()
         if role not in config.DIVISION_ROLES:
             await ctx.send(f"❌ Unknown role. Options: {', '.join(config.DIVISION_ROLES.keys())}")
@@ -462,39 +942,32 @@ class MilitaryCommands(commands.Cog):
                 f"**{config.DIVISION_ROLES[role]['name']}**."
             )
             return
-
         ok, msg = self._division_size_ok(size)
         if not ok:
             await ctx.send(f"❌ {msg}")
             return
-
         name = name.strip()
         lim = config.DIVISION_LIMITS
         if not (lim["min_name_length"] <= len(name) <= lim["max_name_length"]):
             await ctx.send(f"❌ Name must be {lim['min_name_length']}–{lim['max_name_length']} chars.")
             return
-
         if self._division_cap_reached(user_id):
             await ctx.send(f"❌ You already have {config.DIVISION_LIMITS['max_per_user']} divisions.")
             return
         if civ['military']['soldiers'] < size:
             await ctx.send(f"❌ You only have {format_number(civ['military']['soldiers'])} soldiers.")
             return
-
         r = config.DIVISION_ROLES[role]
         gold_cost = size * r["cost_gold"]
         food_cost = size * r["cost_food"]
-
         if not self.civ_manager.can_afford(user_id, {"gold": gold_cost, "food": food_cost}):
             await ctx.send(f"❌ Need 🪙 {format_number(gold_cost)} gold and 🌾 {format_number(food_cost)} food.")
             return
-
         owned = self.db.get_player_territories(user_id)
         if not owned:
             await ctx.send("❌ You need at least one province to station a division.")
             return
         location = owned[0]
-
         self.civ_manager.spend_resources(user_id, {"gold": gold_cost, "food": food_cost})
         self.civ_manager.update_military(user_id, {"soldiers": -size})
         division_id = self.db.create_division(user_id, name, role, size, location)
@@ -503,9 +976,7 @@ class MilitaryCommands(commands.Cog):
             self.civ_manager.update_military(user_id, {"soldiers": size})
             await ctx.send("❌ Failed to create division.")
             return
-
         self.civ_manager.apply_faction_effects(user_id, "train_soldiers")
-
         embed = create_embed(f"⚔️ Division Formed — {name}",
                              f"**{name}** ({r['name']}) is ready.",
                              guilded.Color.green())
@@ -620,7 +1091,7 @@ class MilitaryCommands(commands.Cog):
         return None
 
     # =================================================================
-    # GENERAL COMMANDS
+    # GENERALS
     # =================================================================
     def _general_cap_reached(self, user_id: str) -> bool:
         try:
@@ -631,8 +1102,7 @@ class MilitaryCommands(commands.Cog):
     @commands.command(name='creategeneral', aliases=['mkgen'])
     async def create_general_cmd(self, ctx, *, name: str = None):
         if not name:
-            await ctx.send(f"🎖️ **Create General**\nUsage: `.creategeneral <name>`\n"
-                           f"Max {config.GENERAL_LIMITS['max_per_user']} generals.")
+            await ctx.send(f"🎖️ **Create General**\nUsage: `.creategeneral <name>`")
             return
         user_id = str(ctx.author.id)
         if not self.civ_manager.get_civilization(user_id):
@@ -744,7 +1214,7 @@ class MilitaryCommands(commands.Cog):
         return None
 
     # =================================================================
-    # TRAIN
+    # TRAIN / TECH
     # =================================================================
     @commands.command(name='train')
     async def train_soldiers(self, ctx, unit_type: str = None, amount: int = None):
@@ -759,9 +1229,7 @@ class MilitaryCommands(commands.Cog):
                 embed = create_embed("⚔️ Military Training", "Train units!", guilded.Color.blue())
                 embed.add_field(name="Available",
                                 value=f"`soldiers` ({config.MILITARY['train_cost_soldier_gold']}g, {config.MILITARY['train_cost_soldier_food']}f each)\n"
-                                      f"`spies` ({config.MILITARY['train_cost_spy_gold']}g, {config.MILITARY['train_cost_spy_food']}f each)",
-                                inline=False)
-                embed.add_field(name="Usage", value="`.train <soldiers|spies> <amount>`", inline=False)
+                                      f"`spies` ({config.MILITARY['train_cost_spy_gold']}g, {config.MILITARY['train_cost_spy_food']}f each)")
                 await ctx.send(embed=embed)
                 return
             if not await self.check_civil_war_and_proceed(ctx, user_id):
@@ -785,8 +1253,6 @@ class MilitaryCommands(commands.Cog):
                 return
             self._start_cooldown(user_id, 'train', cooldown_seconds)
             mod = self.civ_manager.get_ideology_modifier(user_id, "soldier_training_speed")
-            mod *= self.civ_manager.get_faction_blessing_modifier(user_id, "soldier_training_speed")
-            mod *= self.civ_manager.get_faction_bane_modifier(user_id, "soldier_training_speed")
             bonus_units = penalty_units = 0
             if mod > 1.0 and random.random() < (mod - 1.0) * 0.5:
                 bonus_units = max(1, amount // 10); amount += bonus_units
@@ -840,6 +1306,44 @@ class MilitaryCommands(commands.Cog):
         except Exception as e:
             logger.error(f"trainboost error: {e}", exc_info=True)
 
+    @commands.command(name='tech')
+    async def upgrade_tech(self, ctx, branch: str = None, amount: int = 1):
+        user_id = str(ctx.author.id)
+        civ = self.civ_manager.get_civilization(user_id)
+        if not civ:
+            await ctx.send("❌ Need a civilization.")
+            return
+        if not branch:
+            embed = create_embed("🔬 Tech Upgrade",
+                                 f"{config.MILITARY['tech_upgrade_cost']} gold per level.",
+                                 guilded.Color.blue())
+            embed.add_field(name="Branches", value="`ground` / `naval` / `air` / `status`", inline=False)
+            await ctx.send(embed=embed)
+            return
+        if branch == "status":
+            t = self._get_military_tech(user_id)
+            await ctx.send(embed=create_embed("🔬 Tech",
+                                              f"Ground: **{t['ground_tech']}**\n"
+                                              f"Naval: **{t['naval_tech']}**\n"
+                                              f"Air: **{t['air_tech']}**",
+                                              guilded.Color.blue()))
+            return
+        if branch not in ("ground", "naval", "air"):
+            await ctx.send("❌ Choose ground / naval / air.")
+            return
+        t = self._get_military_tech(user_id)
+        cur = t.get(f"{branch}_tech", 1)
+        if cur + amount > 10:
+            await ctx.send("❌ Tech cap is 10.")
+            return
+        cost = config.MILITARY['tech_upgrade_cost'] * amount
+        if not self.civ_manager.can_afford(user_id, {"gold": cost}):
+            await ctx.send(f"❌ Need {format_number(cost)} gold.")
+            return
+        self.civ_manager.spend_resources(user_id, {"gold": cost})
+        self._update_military_tech(user_id, {f"{branch}_tech": amount})
+        await ctx.send(f"🔬 {branch.capitalize()} tech {cur} → {cur + amount}.")
+
     # =================================================================
     # DECLARE WAR
     # =================================================================
@@ -887,37 +1391,60 @@ class MilitaryCommands(commands.Cog):
     # TACTICS PANEL
     # =================================================================
     class TacticsPanelView(guilded.ui.View):
-        """Main tactics panel — 4 selects + 3 buttons."""
-
-        def __init__(self, bot, ctx, attacker_id: str, defender_id: str, timeout: float = 300.0):
+        def __init__(self, cog, ctx, attacker_id: str, defender_id: str, timeout: float = 300.0):
             super().__init__(timeout=timeout)
-            self.bot = bot
+            self.cog = cog
+            self.bot = cog.bot
             self.ctx = ctx
             self.attacker_id = attacker_id
             self.defender_id = defender_id
+            self.user_id = int(attacker_id)
 
-            # State
             self.direction: Optional[str] = None
             self.mentality: Optional[str] = None
             self.technique: Optional[str] = None
-            self.divisions: List[str] = []  # list of division IDs
+            self.divisions: List[str] = []
 
-            # Advanced sub-panel state
             self.general_id: Optional[str] = None
             self.instructions: List[str] = []
             self.phase_opening: Optional[str] = None
             self.phase_main: Optional[str] = None
             self.phase_exploitation: Optional[str] = None
 
-            # Gather civ data
-            civ = bot.civ_manager.get_civilization(attacker_id)
+            # AI tactic fields (new)
+            self.ai_plan_score: Optional[float] = None
+            self.ai_plan_text: Optional[str] = None
+            self.ai_plan_notes: Optional[str] = None
+
+            civ = cog.civ_manager.get_civilization(attacker_id)
             self.doctrine = (civ or {}).get("doctrine")
-            self.divisions_owned = bot.db.get_user_divisions(attacker_id)
+            self.divisions_owned = cog.db.get_user_divisions(attacker_id)
 
             self._build_selects()
 
+        def _build_ai_context(self) -> str:
+            civ = self.cog.civ_manager.get_civilization(self.attacker_id)
+            target_civ = self.cog.civ_manager.get_civilization(self.defender_id)
+            if not civ or not target_civ:
+                return "No context available."
+            return (
+                f"Attacker: {civ.get('name','?')} "
+                f"(soldiers {civ['military'].get('soldiers',0):,}, "
+                f"spies {civ['military'].get('spies',0):,}, "
+                f"tech {civ['military'].get('tech_level',0)})\n"
+                f"Defender: {target_civ.get('name','?')} "
+                f"(soldiers {target_civ['military'].get('soldiers',0):,}, "
+                f"spies {target_civ['military'].get('spies',0):,}, "
+                f"tech {target_civ['military'].get('tech_level',0)})\n"
+                f"Attacker doctrine: {self.doctrine or 'none'}\n"
+                f"Defender doctrine: {target_civ.get('doctrine') or 'none'}\n"
+                f"Chosen direction: {self.direction or 'unset'}\n"
+                f"Chosen technique: {self.technique or 'unset'}\n"
+                f"Chosen mentality: {self.mentality or 'unset'}\n"
+                f"Divisions committed: {len(self.divisions)}"
+            )
+
         def _build_selects(self):
-            # --- Row 1: Direction ---
             dir_options = [
                 guilded.SelectOption(
                     label=f"{d['emoji']} {d['name']}",
@@ -928,50 +1455,42 @@ class MilitaryCommands(commands.Cog):
             ]
             self.direction_select = guilded.ui.Select(
                 placeholder="📍 Direction of attack",
-                options=dir_options,
-                row=0,
+                options=dir_options, row=0,
             )
             self.direction_select.callback = self._on_direction
             self.add_item(self.direction_select)
 
-            # --- Row 2: Mentality ---
             ment_options = [
                 guilded.SelectOption(
                     label=f"{m['emoji']} {m['name']}",
-                    value=k,
-                    description=m['desc']
+                    value=k, description=m['desc']
                 )
                 for k, m in config.MENTALITIES.items()
             ]
             self.mentality_select = guilded.ui.Select(
                 placeholder="🧠 Mentality",
-                options=ment_options,
-                row=1,
+                options=ment_options, row=1,
             )
             self.mentality_select.callback = self._on_mentality
             self.add_item(self.mentality_select)
 
-            # --- Row 3: Technique (doctrine-gated) ---
             tech_options = []
             for tk, t in config.TECHNIQUES.items():
                 if self.doctrine and tk in config.TECHNIQUES:
                     if self.doctrine in t.get("doctrines", []):
                         tech_options.append(guilded.SelectOption(
                             label=f"{t['emoji']} {t['name']}",
-                            value=tk,
-                            description=t['desc'][:100],
+                            value=tk, description=t['desc'][:100],
                         ))
             if not tech_options:
                 tech_options = [guilded.SelectOption(label="No techniques available", value="_none")]
             self.technique_select = guilded.ui.Select(
                 placeholder="🎯 Technique",
-                options=tech_options[:25],
-                row=2,
+                options=tech_options[:25], row=2,
             )
             self.technique_select.callback = self._on_technique
             self.add_item(self.technique_select)
 
-            # --- Row 4: Divisions (multi) ---
             div_options = []
             for d in self.divisions_owned[:25]:
                 role = config.DIVISION_ROLES.get(d.get("type", ""), {})
@@ -992,13 +1511,19 @@ class MilitaryCommands(commands.Cog):
             self.divisions_select.callback = self._on_divisions
             self.add_item(self.divisions_select)
 
-            # --- Row 5: Buttons ---
             launch_btn = guilded.ui.Button(
                 label="LAUNCH ATTACK", emoji="⚔️",
                 style=guilded.ButtonStyle.danger, row=4,
             )
             launch_btn.callback = self._on_launch
             self.add_item(launch_btn)
+
+            ai_btn = guilded.ui.Button(
+                label="AI Tactic", emoji="🧠",
+                style=guilded.ButtonStyle.success, row=4,
+            )
+            ai_btn.callback = self._on_ai_tactic
+            self.add_item(ai_btn)
 
             advanced_btn = guilded.ui.Button(
                 label="Advanced", emoji="⚙️",
@@ -1014,50 +1539,49 @@ class MilitaryCommands(commands.Cog):
             cancel_btn.callback = self._on_cancel
             self.add_item(cancel_btn)
 
-        async def _on_direction(self, interaction: guilded.Interaction):
-            if interaction.user.id != int(self.attacker_id):
-                await interaction.response.send_message("Not your panel.", ephemeral=True)
-                return
+        async def _on_direction(self, interaction):
+            if interaction.user.id != self.user_id:
+                await interaction.response.send_message("Not your panel.", ephemeral=True); return
             self.direction = self.direction_select.values[0]
             await interaction.response.defer()
 
-        async def _on_mentality(self, interaction: guilded.Interaction):
-            if interaction.user.id != int(self.attacker_id):
-                await interaction.response.send_message("Not your panel.", ephemeral=True)
-                return
+        async def _on_mentality(self, interaction):
+            if interaction.user.id != self.user_id:
+                await interaction.response.send_message("Not your panel.", ephemeral=True); return
             self.mentality = self.mentality_select.values[0]
             await interaction.response.defer()
 
-        async def _on_technique(self, interaction: guilded.Interaction):
-            if interaction.user.id != int(self.attacker_id):
-                await interaction.response.send_message("Not your panel.", ephemeral=True)
-                return
+        async def _on_technique(self, interaction):
+            if interaction.user.id != self.user_id:
+                await interaction.response.send_message("Not your panel.", ephemeral=True); return
             self.technique = self.technique_select.values[0]
             await interaction.response.defer()
 
-        async def _on_divisions(self, interaction: guilded.Interaction):
-            if interaction.user.id != int(self.attacker_id):
-                await interaction.response.send_message("Not your panel.", ephemeral=True)
-                return
+        async def _on_divisions(self, interaction):
+            if interaction.user.id != self.user_id:
+                await interaction.response.send_message("Not your panel.", ephemeral=True); return
             self.divisions = [v for v in self.divisions_select.values if v != "_none"]
             await interaction.response.defer()
 
-        async def _on_advanced(self, interaction: guilded.Interaction):
-            if interaction.user.id != int(self.attacker_id):
-                await interaction.response.send_message("Not your panel.", ephemeral=True)
-                return
+        async def _on_ai_tactic(self, interaction):
+            if interaction.user.id != self.user_id:
+                await interaction.response.send_message("Not your panel.", ephemeral=True); return
+            await interaction.response.send_modal(AITacticModal(self))
+
+        async def _on_advanced(self, interaction):
+            if interaction.user.id != self.user_id:
+                await interaction.response.send_message("Not your panel.", ephemeral=True); return
             sub = MilitaryCommands.AdvancedTacticsView(
-                self.bot, self.ctx, self.attacker_id, self.defender_id, self
+                self.cog, self.ctx, self.attacker_id, self.defender_id, self
             )
             await interaction.response.send_message(
                 "⚙️ **Advanced Options** — configure general, instructions, and battle phases.",
                 view=sub, ephemeral=True
             )
 
-        async def _on_cancel(self, interaction: guilded.Interaction):
-            if interaction.user.id != int(self.attacker_id):
-                await interaction.response.send_message("Not your panel.", ephemeral=True)
-                return
+        async def _on_cancel(self, interaction):
+            if interaction.user.id != self.user_id:
+                await interaction.response.send_message("Not your panel.", ephemeral=True); return
             for item in self.children:
                 item.disabled = True
             try:
@@ -1067,34 +1591,26 @@ class MilitaryCommands(commands.Cog):
             await interaction.followup.send("❌ Attack cancelled.", ephemeral=True)
             self.stop()
 
-        async def _on_launch(self, interaction: guilded.Interaction):
-            if interaction.user.id != int(self.attacker_id):
-                await interaction.response.send_message("Not your panel.", ephemeral=True)
-                return
+        async def _on_launch(self, interaction):
+            if interaction.user.id != self.user_id:
+                await interaction.response.send_message("Not your panel.", ephemeral=True); return
 
-            # Validate
             if not self.direction:
-                await interaction.response.send_message("❌ Pick a direction first.", ephemeral=True)
-                return
+                await interaction.response.send_message("❌ Pick a direction first.", ephemeral=True); return
             if not self.mentality:
-                await interaction.response.send_message("❌ Pick a mentality first.", ephemeral=True)
-                return
+                await interaction.response.send_message("❌ Pick a mentality first.", ephemeral=True); return
             if not self.technique or self.technique == "_none":
-                await interaction.response.send_message("❌ Pick a technique first.", ephemeral=True)
-                return
+                await interaction.response.send_message("❌ Pick a technique first.", ephemeral=True); return
             if not self.divisions:
-                await interaction.response.send_message("❌ Commit at least one division.", ephemeral=True)
-                return
+                await interaction.response.send_message("❌ Commit at least one division.", ephemeral=True); return
 
-            # Check technique cost
             t = config.TECHNIQUES.get(self.technique, {})
             cost = t.get("cost", {})
-            if not self.bot.civ_manager.can_afford(self.attacker_id, cost):
+            if not self.cog.civ_manager.can_afford(self.attacker_id, cost):
                 cost_str = ", ".join(f"{v} {k}" for k, v in cost.items())
                 await interaction.response.send_message(f"❌ Cannot afford technique: {cost_str}.", ephemeral=True)
                 return
 
-            # Build order record (Part 2 will resolve it)
             order = {
                 "attacker_id": self.attacker_id,
                 "defender_id": self.defender_id,
@@ -1107,11 +1623,15 @@ class MilitaryCommands(commands.Cog):
                 "phase_opening": self.phase_opening,
                 "phase_main": self.phase_main,
                 "phase_exploitation": self.phase_exploitation,
+                # AI tactic (new)
+                "ai_plan_score": self.ai_plan_score,
+                "ai_plan_text": self.ai_plan_text,
+                "ai_plan_notes": self.ai_plan_notes,
                 "created_at": datetime.utcnow().isoformat(),
                 "status": "pending",
             }
             attack_id = f"atk_{random.randint(1000000, 9999999)}"
-            saved = self.bot.db.save_pending_attack(attack_id, order)
+            saved = self.cog.db.save_pending_attack(attack_id, order)
 
             for item in self.children:
                 item.disabled = True
@@ -1121,6 +1641,10 @@ class MilitaryCommands(commands.Cog):
                 pass
 
             if saved:
+                ai_line = ""
+                if self.ai_plan_score is not None:
+                    bonus_pct = (self.ai_plan_score - 0.5) * 50
+                    ai_line = f"\n**AI Plan Score:** {self.ai_plan_score*100:.0f}/100 ({bonus_pct:+.1f}% attack)"
                 await interaction.followup.send(
                     embed=create_embed(
                         "⚔️ Attack Plan Locked In",
@@ -1128,8 +1652,9 @@ class MilitaryCommands(commands.Cog):
                         f"**Direction:** {config.ATTACK_DIRECTIONS[self.direction]['emoji']} {config.ATTACK_DIRECTIONS[self.direction]['name']}\n"
                         f"**Mentality:** {config.MENTALITIES[self.mentality]['emoji']} {config.MENTALITIES[self.mentality]['name']}\n"
                         f"**Technique:** {t.get('emoji','')} {t.get('name','?')}\n"
-                        f"**Divisions:** {len(self.divisions)}\n\n"
-                        f"*Part 2 will resolve the engagement. Use `.attackresolve {attack_id}` when wired.*",
+                        f"**Divisions:** {len(self.divisions)}"
+                        f"{ai_line}\n\n"
+                        f"Use `.attackresolve {attack_id}` to resolve the engagement.",
                         guilded.Color.dark_red()
                     )
                 )
@@ -1139,26 +1664,21 @@ class MilitaryCommands(commands.Cog):
 
     # ---- Advanced sub-panel ----
     class AdvancedTacticsView(guilded.ui.View):
-        """Sub-panel: general, instructions, 3 battle phases."""
-
-        def __init__(self, bot, ctx, attacker_id: str, defender_id: str,
-                     parent_view, timeout: float = 300.0):
+        def __init__(self, cog, ctx, attacker_id: str, defender_id: str, parent_view, timeout: float = 300.0):
             super().__init__(timeout=timeout)
-            self.bot = bot
+            self.cog = cog
+            self.bot = cog.bot
             self.ctx = ctx
             self.attacker_id = attacker_id
             self.defender_id = defender_id
             self.parent = parent_view
-
             self._build()
 
         def _build(self):
-            civ = self.bot.civ_manager.get_civilization(self.attacker_id)
+            civ = self.cog.civ_manager.get_civilization(self.attacker_id)
             doctrine = (civ or {}).get("doctrine")
-            self.doctrine = doctrine
 
-            # --- Row 1: General ---
-            generals = self.bot.db.get_user_generals(self.attacker_id)
+            generals = self.cog.db.get_user_generals(self.attacker_id)
             g_options = []
             for g in generals[:25]:
                 pos = config.GENERAL_POSITIVE_TRAITS.get(g.get("positive_trait"), {})
@@ -1171,13 +1691,11 @@ class MilitaryCommands(commands.Cog):
                 g_options = [guilded.SelectOption(label="No generals", value="_none")]
             self.general_select = guilded.ui.Select(
                 placeholder="🎖️ Assign commander",
-                options=g_options[:25],
-                row=0,
+                options=g_options[:25], row=0,
             )
             self.general_select.callback = self._on_general
             self.add_item(self.general_select)
 
-            # --- Row 2: Instructions (multi) ---
             allowed_instr = config.DOCTRINES.get(doctrine, {}).get("allowed_instructions", [])
             i_options = []
             for k in allowed_instr[:25]:
@@ -1185,117 +1703,93 @@ class MilitaryCommands(commands.Cog):
                 if not ins: continue
                 i_options.append(guilded.SelectOption(
                     label=f"{ins['emoji']} {ins['name']}",
-                    value=k,
-                    description=ins['desc'][:100],
+                    value=k, description=ins['desc'][:100],
                 ))
             if not i_options:
                 i_options = [guilded.SelectOption(label="No instructions available", value="_none")]
             self.instructions_select = guilded.ui.Select(
                 placeholder="📋 Operational instructions (multi)",
-                options=i_options[:25],
-                min_values=0,
-                max_values=min(5, len(i_options)),
-                row=1,
+                options=i_options[:25], min_values=0,
+                max_values=min(5, len(i_options)), row=1,
             )
             self.instructions_select.callback = self._on_instructions
             self.add_item(self.instructions_select)
 
-            # --- Row 3: Opening phase ---
             opening = config.BATTLE_PHASES["opening"]["options"]
             o_options = [
                 guilded.SelectOption(
-                    label=f"{opening[k]['name']}",
-                    value=k,
+                    label=f"{opening[k]['name']}", value=k,
                     description=", ".join(f"{kk} {vv:+.2f}" for kk, vv in opening[k]["effect"].items())[:100],
-                )
-                for k in opening
+                ) for k in opening
             ]
             self.opening_select = guilded.ui.Select(
                 placeholder="🎬 Opening phase",
-                options=o_options[:25],
-                row=2,
+                options=o_options[:25], row=2,
             )
             self.opening_select.callback = self._on_opening
             self.add_item(self.opening_select)
 
-            # --- Row 4: Main phase ---
             main = config.BATTLE_PHASES["main"]["options"]
             m_options = [
                 guilded.SelectOption(
-                    label=f"{main[k]['name']}",
-                    value=k,
+                    label=f"{main[k]['name']}", value=k,
                     description=", ".join(f"{kk} {vv:+.2f}" for kk, vv in main[k]["effect"].items())[:100],
-                )
-                for k in main
+                ) for k in main
             ]
             self.main_select = guilded.ui.Select(
                 placeholder="⚔️ Main phase",
-                options=m_options[:25],
-                row=3,
+                options=m_options[:25], row=3,
             )
             self.main_select.callback = self._on_main
             self.add_item(self.main_select)
 
-            # --- Row 5: Exploitation + Save/Cancel ---
             exploit = config.BATTLE_PHASES["exploitation"]["options"]
             e_options = [
                 guilded.SelectOption(
-                    label=f"{exploit[k]['name']}",
-                    value=k,
+                    label=f"{exploit[k]['name']}", value=k,
                     description=", ".join(f"{kk} {vv:+.2f}" for kk, vv in exploit[k]["effect"].items())[:100],
-                )
-                for k in exploit
+                ) for k in exploit
             ]
             self.exploitation_select = guilded.ui.Select(
                 placeholder="🏆 Exploitation phase",
-                options=e_options[:25],
-                row=4,
+                options=e_options[:25], row=4,
             )
             self.exploitation_select.callback = self._on_exploitation
             self.add_item(self.exploitation_select)
 
-            # Note: at 5 rows we're at max. Save/Cancel go as buttons in a message reply.
-            # Simpler: the parent panel's "LAUNCH" button collects these values.
-
-        async def _on_general(self, interaction: guilded.Interaction):
+        async def _on_general(self, interaction):
             if interaction.user.id != int(self.attacker_id):
-                await interaction.response.send_message("Not your panel.", ephemeral=True)
-                return
+                await interaction.response.send_message("Not your panel.", ephemeral=True); return
             v = self.general_select.values[0]
             self.parent.general_id = None if v == "_none" else v
             await interaction.response.defer()
 
-        async def _on_instructions(self, interaction: guilded.Interaction):
+        async def _on_instructions(self, interaction):
             if interaction.user.id != int(self.attacker_id):
-                await interaction.response.send_message("Not your panel.", ephemeral=True)
-                return
+                await interaction.response.send_message("Not your panel.", ephemeral=True); return
             self.parent.instructions = [v for v in self.instructions_select.values if v != "_none"]
             await interaction.response.defer()
 
-        async def _on_opening(self, interaction: guilded.Interaction):
+        async def _on_opening(self, interaction):
             if interaction.user.id != int(self.attacker_id):
-                await interaction.response.send_message("Not your panel.", ephemeral=True)
-                return
+                await interaction.response.send_message("Not your panel.", ephemeral=True); return
             self.parent.phase_opening = self.opening_select.values[0]
             await interaction.response.defer()
 
-        async def _on_main(self, interaction: guilded.Interaction):
+        async def _on_main(self, interaction):
             if interaction.user.id != int(self.attacker_id):
-                await interaction.response.send_message("Not your panel.", ephemeral=True)
-                return
+                await interaction.response.send_message("Not your panel.", ephemeral=True); return
             self.parent.phase_main = self.main_select.values[0]
             await interaction.response.defer()
 
-        async def _on_exploitation(self, interaction: guilded.Interaction):
+        async def _on_exploitation(self, interaction):
             if interaction.user.id != int(self.attacker_id):
-                await interaction.response.send_message("Not your panel.", ephemeral=True)
-                return
+                await interaction.response.send_message("Not your panel.", ephemeral=True); return
             self.parent.phase_exploitation = self.exploitation_select.values[0]
             await interaction.response.defer()
 
     @commands.command(name='tactics')
     async def tactics_cmd(self, ctx, target: guilded.Member = None):
-        """Open the tactics panel for an attack."""
         if not target:
             await ctx.send("⚔️ Usage: `.tactics <user>`\nOpens the tactical planning panel.")
             return
@@ -1320,17 +1814,306 @@ class MilitaryCommands(commands.Cog):
             await ctx.send("❌ You need at least one division. Use `.createdivision`.")
             return
 
-        panel = MilitaryCommands.TacticsPanelView(self.bot, ctx, user_id, target_id)
+        panel = MilitaryCommands.TacticsPanelView(self, ctx, user_id, target_id)
         embed = create_embed(
             "🎯 Tactical Planning",
             f"Attacker: **{civ['name']}**\nDefender: **{target_civ['name']}**\n\n"
             f"**Doctrine:** {config.DOCTRINES[civ['doctrine']]['emoji']} "
             f"{config.DOCTRINES[civ['doctrine']]['name']}\n\n"
             f"Configure your attack, then press **LAUNCH ATTACK**.\n"
-            f"Use **Advanced** for general, instructions, and battle phases.",
+            f"Use **Advanced** for general, instructions, and battle phases.\n"
+            f"Use **🧠 AI Tactic** to describe your overall plan in your own words — "
+            f"the AI will rate it and apply a battle modifier.\n\n"
+            f"⚠️ **On victory you can capture provinces** — count scales with your "
+            f"power ratio and your exploitation phase. No cap.",
             guilded.Color.dark_red()
         )
         await ctx.send(embed=embed, view=panel)
+
+    # =================================================================
+    # BANK RAID — Skill driven, no cooldown
+    # =================================================================
+    @commands.command(name='bankraid', aliases=['braid'])
+    async def bank_raid(self, ctx, target: guilded.Member = None):
+        """Skill-based heist. Describe your plan; the AI rates it. No cooldown."""
+        try:
+            user_id = str(ctx.author.id)
+
+            if not target:
+                embed = create_embed(
+                    "🏦 Bank Raid — Write Your Heist",
+                    "**Usage:** `.bankraid @user`\n\n"
+                    "**How it works:**\n"
+                    "You'll be asked to describe your heist plan in your own words. "
+                    "The AI rates your plan on creativity, plausibility, escape plan, "
+                    "and execution. **Your plan is the main driver of success.**\n\n"
+                    "**Requirements:**\n"
+                    f"• At least **{BANKRAID['min_spies']} spies**\n"
+                    f"• **Tech {BANKRAID['min_tech']}+**\n"
+                    f"• Target must have **{BANKRAID['min_target_deposits']:,}+ gold in the bank**\n\n"
+                    "**Rewards:** Steal **5–20%** of target deposits (max 10M)\n"
+                    "**Risks:** Lose spies, get sanctioned, get detected\n\n"
+                    "**No cooldown.** Great plans win. Bad plans fail. Stats help, but skill decides.",
+                    guilded.Color.dark_red(),
+                )
+                await ctx.send(embed=embed)
+                return
+
+            target_id = str(target.id)
+            if target_id == user_id:
+                await ctx.send("❌ You can't raid your own bank, President.")
+                return
+
+            civ = self.civ_manager.get_civilization(user_id)
+            target_civ = self.civ_manager.get_civilization(target_id)
+            if not civ or not target_civ:
+                await ctx.send("❌ Both parties need a civilization.")
+                return
+
+            if civ['military']['spies'] < BANKRAID["min_spies"]:
+                await ctx.send(f"❌ You need at least **{BANKRAID['min_spies']} spies**. "
+                               f"You have {civ['military']['spies']}.")
+                return
+            attacker_tech = civ['military']['tech_level']
+            if attacker_tech < BANKRAID["min_tech"]:
+                await ctx.send(f"❌ You need **Tech {BANKRAID['min_tech']}** for a bank raid.")
+                return
+
+            target_bank = target_civ.get('bank') or {}
+            target_deposits = int(target_bank.get('deposits', 0))
+            if target_deposits < BANKRAID["min_target_deposits"]:
+                await ctx.send(f"❌ **{target_civ['name']}** only has "
+                               f"🪙 {format_number(target_deposits)} in the bank — "
+                               f"minimum is {BANKRAID['min_target_deposits']:,}.")
+                return
+
+            target_has_mirror = self._has_hyperitem(target_id, "Mirror")
+            target_has_shield = self._has_hyperitem(target_id, "Anti-Nuke Shield")
+
+            # ---- Prompt for the plan ----
+            intel = (
+                f"Target: {target_civ['name']}\n"
+                f"Bank deposits: {target_deposits:,} gold\n"
+                f"Target spies: {target_civ['military'].get('spies',0):,}\n"
+                f"Target tech level: {target_civ['military'].get('tech_level',0)}\n"
+                f"Target credit score: {int(target_bank.get('credit_score',100))}/100\n"
+                f"Attacker spies: {civ['military'].get('spies',0):,}\n"
+                f"Attacker tech: {attacker_tech}"
+            )
+            prompt_embed = create_embed(
+                "🏦 Write Your Heist Plan",
+                f"**Target:** {target_civ['name']} — 🪙 {format_number(target_deposits)} in the vault\n\n"
+                f"Describe your heist in **2–4 sentences** in this channel. "
+                f"Cover **entry, execution, and escape** for the best score.\n\n"
+                f"Type `cancel` to abort. You have **2 minutes**.",
+                guilded.Color.dark_gold(),
+            )
+            await ctx.send(embed=prompt_embed)
+
+            def check(m):
+                return (m.author.id == ctx.author.id and m.channel.id == ctx.channel.id
+                        and not m.author.bot)
+            try:
+                msg = await self.bot.wait_for('message', timeout=120.0, check=check)
+            except asyncio.TimeoutError:
+                await ctx.send("🛑 Heist cancelled (timeout).")
+                return
+
+            plan_text = (msg.content or "").strip()
+            if plan_text.lower() in ("cancel", "abort", "stop"):
+                await ctx.send("🛑 Heist cancelled.")
+                return
+            if len(plan_text) < 15:
+                await ctx.send("❌ Plan too short. Describe it properly next time.")
+                return
+
+            # ---- AI rate the plan ----
+            async with ctx.typing():
+                rating = await self._ai_rate_heist(plan_text, intel)
+
+            if rating is None:
+                await ctx.send("⚠️ AI evaluator unavailable. Heist aborted — no resources lost.")
+                return
+
+            ai_score = float(rating.get("score", 0.5))
+            spy_loss_mult = float(rating.get("spy_loss_mult", 1.0))
+
+            # ---- Stat modifier ----
+            spy_swing = (civ['military']['spies'] - target_civ['military']['spies']) / 500.0
+            spy_swing = max(-0.30, min(0.30, spy_swing))
+            tech_swing = max(-0.15, min(0.20, (attacker_tech - target_civ['military']['tech_level']) * 0.03))
+            ideo_bonus = 0.0
+            if civ.get('ideology') == 'terrorism':
+                ideo_bonus += 0.10
+            elif civ.get('ideology') == 'anarchy':
+                ideo_bonus += 0.05
+
+            stat_score = max(0.0, min(1.0, 0.5 + spy_swing + tech_swing + ideo_bonus))
+
+            combined = (ai_score * BANKRAID["ai_weight"]) + (stat_score * BANKRAID["stat_weight"])
+            success_chance = max(BANKRAID["min_success"],
+                                 min(BANKRAID["max_success"], combined))
+
+            # Show the review
+            review_embed = create_embed(
+                "🧠 Heist Plan Reviewed",
+                f"**Your Plan:** *\"{plan_text[:200]}\"*\n\n"
+                f"**AI Score:** {ai_score*100:.0f}/100\n"
+                f"**Verdict:** {rating.get('verdict','—')}\n"
+                f"**Reasoning:** {rating.get('reasoning','—')}\n\n"
+                f"**Stat Score:** {stat_score*100:.0f}/100\n"
+                f"**Final Success Chance:** **{success_chance*100:.1f}%**",
+                guilded.Color.purple(),
+            )
+            await ctx.send(embed=review_embed)
+
+            # ---- Defense resolution ----
+            if target_has_mirror:
+                self._consume_hyperitem(target_id, "Mirror")
+                spy_loss = int(civ['military']['spies'] * random.uniform(0.20, 0.35) * spy_loss_mult)
+                spy_loss = max(1, spy_loss)
+                self.civ_manager.update_military(user_id, {"spies": -spy_loss})
+                self.civ_manager.update_population(user_id, {"happiness": -15})
+                await ctx.send(embed=create_embed(
+                    "🪞 BANK RAID REFLECTED!",
+                    f"**{target_civ['name']}**'s **Mirror** caught your crew mid-heist.\n"
+                    f"**Spies lost:** 🕵️ {format_number(spy_loss)}\n"
+                    f"**Stolen:** 0 gold",
+                    guilded.Color.purple(),
+                ))
+                try:
+                    tu = await self.bot.fetch_user(int(target_id))
+                    await tu.send(f"🪞 **Bank Raid Reflected!** {civ['name']} tried to raid your bank "
+                                  f"but your Mirror caught them.")
+                except Exception:
+                    pass
+                return
+
+            if target_has_shield:
+                self._consume_hyperitem(target_id, "Anti-Nuke Shield")
+                spy_loss = int(civ['military']['spies'] * random.uniform(0.05, 0.15) * spy_loss_mult)
+                spy_loss = max(1, spy_loss)
+                self.civ_manager.update_military(user_id, {"spies": -spy_loss})
+                await ctx.send(embed=create_embed(
+                    "🛡️ BANK RAID BLOCKED!",
+                    f"**{target_civ['name']}**'s **Anti-Nuke Shield** sealed the vault.\n"
+                    f"**Spies lost:** 🕵️ {format_number(spy_loss)}\n"
+                    f"**Stolen:** 0 gold",
+                    guilded.Color.blue(),
+                ))
+                try:
+                    tu = await self.bot.fetch_user(int(target_id))
+                    await tu.send(f"🛡️ **Bank Raid Blocked!** {civ['name']} tried to raid your bank "
+                                  f"but your Anti-Nuke Shield stopped them.")
+                except Exception:
+                    pass
+                return
+
+            # ---- Roll ----
+            if random.random() < success_chance:
+                steal_frac = random.uniform(BANKRAID["min_steal_fraction"], BANKRAID["max_steal_fraction"])
+                raw_steal = int(target_deposits * steal_frac)
+                steal = min(raw_steal, BANKRAID["max_steal_absolute"])
+
+                new_target_bank = dict(target_bank)
+                new_target_bank['deposits'] = max(0, target_deposits - steal)
+                self.db.update_civilization(target_id, {"bank": new_target_bank})
+                self.civ_manager._invalidate_civ(target_id)
+
+                self.civ_manager.update_resources(user_id, {"gold": steal})
+                self.civ_manager.update_population(user_id, {"happiness": 8})
+                self.civ_manager.update_population(target_id, {"happiness": -10})
+                self.civ_manager.apply_faction_effects(user_id, "raidcaravan")
+
+                # Small spy loss even on success (escape isn't free)
+                residual_loss = int(civ['military']['spies'] * random.uniform(0.0, 0.05) * spy_loss_mult)
+                if residual_loss > 0:
+                    self.civ_manager.update_military(user_id, {"spies": -residual_loss})
+
+                self.db.log_event(user_id, "bank_raid_success", "Bank Raid Successful",
+                                  f"Stole {steal:,} gold from {target_civ['name']}'s bank.")
+                self.db.log_event(target_id, "bank_raid_victim", "Bank Raid Victim",
+                                  f"{civ['name']} raided their bank for {steal:,} gold.")
+
+                embed = create_embed(
+                    "🏦💰 THE IMPOSSIBLE HEIST — SUCCESS!",
+                    f"Your plan worked. **{civ['name']}** walks out with the vault.\n\n"
+                    f"**{target_civ['name']}** will remember this.",
+                    guilded.Color.gold(),
+                )
+                embed.add_field(name="Stolen", value=f"🪙 **{format_number(steal)}** ({steal_frac*100:.1f}%)",
+                                inline=True)
+                embed.add_field(name="Remaining",
+                                value=f"🪙 {format_number(new_target_bank['deposits'])}",
+                                inline=True)
+                if residual_loss:
+                    embed.add_field(name="Spies lost", value=f"🕵️ {residual_loss}", inline=True)
+                embed.set_footer(text="In your pocket — not your bank. Counter-raids can't touch it.")
+                await ctx.send(embed=embed)
+
+                try:
+                    tu = await self.bot.fetch_user(int(target_id))
+                    await tu.send(f"🏦💀 **YOUR BANK WAS RAIDED!** {civ['name']} stole "
+                                  f"**{format_number(steal)} gold** from your vault.")
+                except Exception:
+                    pass
+
+            else:
+                spy_loss = int(civ['military']['spies'] *
+                               random.uniform(BANKRAID["spy_loss_on_fail_min"],
+                                              BANKRAID["spy_loss_on_fail_max"]) * spy_loss_mult)
+                spy_loss = max(1, spy_loss)
+                self.civ_manager.update_military(user_id, {"spies": -spy_loss})
+                self.civ_manager.update_population(user_id, {"happiness": -12})
+
+                try:
+                    sanctions = target_civ.get('imposed_sanctions') or []
+                    expires = (datetime.utcnow() +
+                               timedelta(hours=BANKRAID["detection_sanction_hours"])).isoformat()
+                    sanctions.append({
+                        "target_id": user_id,
+                        "expires_at": expires,
+                        "reason": "Bank raid retaliation",
+                    })
+                    self.db.update_civilization(target_id, {"imposed_sanctions": sanctions})
+                    received = civ.get('received_sanctions') or []
+                    received.append({
+                        "imposer_id": target_id,
+                        "expires_at": expires,
+                        "reason": "Bank raid retaliation",
+                    })
+                    self.db.update_civilization(user_id, {"received_sanctions": received})
+                    self.civ_manager._invalidate_civ(user_id)
+                    self.civ_manager._invalidate_civ(target_id)
+                except Exception as e:
+                    logger.error(f"Failed to auto-sanction after failed bankraid: {e}")
+
+                self.db.log_event(user_id, "bank_raid_fail", "Bank Raid Failed",
+                                  f"Failed to raid {target_civ['name']}. Lost {spy_loss} spies.")
+
+                embed = create_embed(
+                    "🏦💀 THE HEIST FAILED",
+                    f"Alarms scream. Guards flood the halls.\n\n"
+                    f"**{target_civ['name']}** was ready.\n\n"
+                    f"**Spies lost:** 🕵️ {format_number(spy_loss)}\n"
+                    f"**Happiness:** -12\n"
+                    f"**Retaliation:** {target_civ['name']} has sanctioned you for "
+                    f"{BANKRAID['detection_sanction_hours']}h",
+                    guilded.Color.dark_red(),
+                )
+                await ctx.send(embed=embed)
+
+                try:
+                    tu = await self.bot.fetch_user(int(target_id))
+                    await tu.send(f"🏦🚨 **Bank Raid Attempt Detected!** {civ['name']} tried to raid "
+                                  f"your bank and failed. You've sanctioned them. "
+                                  f"They lost {format_number(spy_loss)} spies.")
+                except Exception:
+                    pass
+
+        except Exception as e:
+            logger.error(f"bankraid error: {e}", exc_info=True)
+            await ctx.send("❌ The heist went wrong on our end. Nothing was stolen.")
 
     # =================================================================
     # STEALTH BATTLE
@@ -1345,10 +2128,7 @@ class MilitaryCommands(commands.Cog):
                 await ctx.send(f"⏳ Wait {remaining // 60}m {remaining % 60}s.")
                 return
             if not target:
-                await ctx.send(
-                    "🕵️ **Stealth Battle**\n`.stealthbattle <user> [timer]`\n"
-                    f"Default timer: **{DEFAULT_STEALTH_TIMER:.0f}s** (range 3–30)."
-                )
+                await ctx.send("🕵️ `.stealthbattle <user> [timer]`")
                 return
             if not await self.check_civil_war_and_proceed(ctx, user_id):
                 return
@@ -1368,12 +2148,10 @@ class MilitaryCommands(commands.Cog):
             if timer is not None and 3.0 <= timer <= 30.0:
                 effective_timer = float(timer)
             question, correct, choices = _generate_stealth_question()
-            intro = create_embed(
-                "🕵️ **INFILTRATION**",
-                f"**Question:** {question}\n\n"
-                f"⏱️ Answer within **{effective_timer:.0f} seconds**.",
-                guilded.Color.dark_blue()
-            )
+            intro = create_embed("🕵️ **INFILTRATION**",
+                                 f"**Question:** {question}\n\n"
+                                 f"⏱️ Answer within **{effective_timer:.0f} seconds**.",
+                                 guilded.Color.dark_blue())
             view = StealthQuestionView(ctx.author.id, question, correct, choices, timeout=effective_timer)
             await ctx.send(embed=intro, view=view)
             await view.wait()
@@ -1492,12 +2270,11 @@ class MilitaryCommands(commands.Cog):
                             value=f"🪙 {format_number(maint['gold'])}\n🌾 {format_number(maint['food'])}",
                             inline=True)
             await ctx.send(embed=embed)
-            self.db.log_event(user_id, "siege", "Siege", f"→ {target_civ['name']}")
         except Exception as e:
             logger.error(f"siege error: {e}", exc_info=True)
 
     # =================================================================
-    # FIND SOLDIERS
+    # FIND
     # =================================================================
     @commands.command(name='find')
     async def find_soldiers(self, ctx):
@@ -1534,7 +2311,7 @@ class MilitaryCommands(commands.Cog):
             logger.error(f"find error: {e}", exc_info=True)
 
     # =================================================================
-    # PEACE
+    # PEACE (legacy)
     # =================================================================
     @commands.command(name='peace')
     async def make_peace(self, ctx, target: guilded.Member = None):
@@ -1658,31 +2435,28 @@ class MilitaryCommands(commands.Cog):
             await ctx.send(f"✅ Used **{card['name']}**.")
 
     # =================================================================
-    # BORDERS (existing border system — separate from tactics panel)
+    # BORDERS
     # =================================================================
     @commands.command(name='addborder')
     async def add_border(self, ctx):
-        try:
-            user_id = str(ctx.author.id)
-            if not await self.check_civil_war_and_proceed(ctx, user_id):
-                return
-            civ = self.civ_manager.get_civilization(user_id)
-            if not civ:
-                await ctx.send("❌ Need a civilization.")
-                return
-            cost = config.MILITARY["border_cost"]
-            if not self.civ_manager.can_afford(user_id, cost):
-                await ctx.send(f"❌ Need 🪙 {format_number(cost['gold'])} / 🪨 {format_number(cost['stone'])} / 🪵 {format_number(cost['wood'])}.")
-                return
-            info = self._get_border_info(user_id)
-            if info.get("has_border"):
-                await ctx.send("❌ Already have a border.")
-                return
-            self.civ_manager.spend_resources(user_id, cost)
-            self._update_border(user_id, {"has_border": True, "border_strength": 100, "border_soldiers": 0})
-            await ctx.send(embed=create_embed("🛡️ Border Built", "Strength 100.", guilded.Color.green()))
-        except Exception as e:
-            logger.error(f"addborder error: {e}", exc_info=True)
+        user_id = str(ctx.author.id)
+        if not await self.check_civil_war_and_proceed(ctx, user_id):
+            return
+        civ = self.civ_manager.get_civilization(user_id)
+        if not civ:
+            await ctx.send("❌ Need a civilization.")
+            return
+        cost = config.MILITARY["border_cost"]
+        if not self.civ_manager.can_afford(user_id, cost):
+            await ctx.send(f"❌ Need 🪙 {format_number(cost['gold'])} / 🪨 {format_number(cost['stone'])} / 🪵 {format_number(cost['wood'])}.")
+            return
+        info = self._get_border_info(user_id)
+        if info.get("has_border"):
+            await ctx.send("❌ Already have a border.")
+            return
+        self.civ_manager.spend_resources(user_id, cost)
+        self._update_border(user_id, {"has_border": True, "border_strength": 100, "border_soldiers": 0})
+        await ctx.send(embed=create_embed("🛡️ Border Built", "Strength 100.", guilded.Color.green()))
 
     @commands.command(name='removeborder')
     async def remove_border(self, ctx):
@@ -1739,7 +2513,7 @@ class MilitaryCommands(commands.Cog):
             await ctx.send("❌ No border or no soldiers on it.")
             return
         pull = min((info["border_soldiers"] * percentage) // 100, info["border_soldiers"])
-        strength_loss = (info["border_strength"] * pull) // info["border_soldiers"]
+        strength_loss = (info["border_strength"] * pull) // max(1, info["border_soldiers"])
         self._update_border(user_id, {
             "border_soldiers": info["border_soldiers"] - pull,
             "border_strength": max(1, info["border_strength"] - strength_loss),
@@ -1772,7 +2546,6 @@ class MilitaryCommands(commands.Cog):
                 embed.add_field(name=f"{d['name']} (`{k}`)",
                                 value=f"🪙{d['cost_gold']} 🪵{d['cost_wood']} 🪨{d['cost_stone']}\n{d['description']}",
                                 inline=True)
-            embed.set_footer(text=".buildship <type> <amount>")
             await ctx.send(embed=embed)
             return
         if not await self.check_civil_war_and_proceed(ctx, user_id):
@@ -1832,47 +2605,6 @@ class MilitaryCommands(commands.Cog):
         self._update_airforce(user_id, {plane_type: amount})
         self.civ_manager.apply_faction_effects(user_id, "buildplane")
         await ctx.send(f"✈️ Built {amount} {d['name']}(s).")
-
-    # =================================================================
-    # TECH
-    # =================================================================
-    @commands.command(name='tech')
-    async def upgrade_tech(self, ctx, branch: str = None, amount: int = 1):
-        user_id = str(ctx.author.id)
-        civ = self.civ_manager.get_civilization(user_id)
-        if not civ:
-            await ctx.send("❌ Need a civilization.")
-            return
-        if not branch:
-            embed = create_embed("🔬 Tech Upgrade",
-                                 f"{config.MILITARY['tech_upgrade_cost']} gold per level.",
-                                 guilded.Color.blue())
-            embed.add_field(name="Branches", value="`ground` / `naval` / `air` / `status`", inline=False)
-            await ctx.send(embed=embed)
-            return
-        if branch == "status":
-            t = self._get_military_tech(user_id)
-            await ctx.send(embed=create_embed("🔬 Tech",
-                                              f"Ground: **{t['ground_tech']}**\n"
-                                              f"Naval: **{t['naval_tech']}**\n"
-                                              f"Air: **{t['air_tech']}**",
-                                              guilded.Color.blue()))
-            return
-        if branch not in ("ground", "naval", "air"):
-            await ctx.send("❌ Choose ground / naval / air.")
-            return
-        t = self._get_military_tech(user_id)
-        cur = t.get(f"{branch}_tech", 1)
-        if cur + amount > 10:
-            await ctx.send("❌ Tech cap is 10.")
-            return
-        cost = config.MILITARY['tech_upgrade_cost'] * amount
-        if not self.civ_manager.can_afford(user_id, {"gold": cost}):
-            await ctx.send(f"❌ Need {format_number(cost)} gold.")
-            return
-        self.civ_manager.spend_resources(user_id, {"gold": cost})
-        self._update_military_tech(user_id, {f"{branch}_tech": amount})
-        await ctx.send(f"🔬 {branch.capitalize()} tech {cur} → {cur + amount}.")
 
     # =================================================================
     # NAVY / AIRFORCE DISPLAY
@@ -2131,11 +2863,10 @@ class MilitaryCommands(commands.Cog):
                        f"(total: {format_number(civ['military']['spies'] + amount)}).")
 
     # =================================================================
-    # ATTACK (legacy quick-attack — bypasses the tactics panel)
+    # QUICK ATTACK (legacy — tactical panel is preferred)
     # =================================================================
     @commands.command(name='attack')
     async def attack_civilization(self, ctx, target: guilded.Member = None, level: int = 5):
-        """Quick attack. For full tactical control use `.tactics`."""
         try:
             user_id = str(ctx.author.id)
             cooldown_seconds = config.COOLDOWNS.get("attack", 3) * 60
@@ -2196,6 +2927,13 @@ class MilitaryCommands(commands.Cog):
                 await self._process_attack_victory(ctx, user_id, target_id, civ, target_civ, margin, level)
                 self.civ_manager.apply_faction_effects(user_id, "attack")
                 self.civ_manager.apply_faction_effects(user_id, "battle_victory")
+                # Province capture for quick attack too
+                captured = await self._capture_provinces(
+                    ctx, user_id, target_id, margin, "consolidate", civ, target_civ
+                )
+                if captured:
+                    self.db.log_event(user_id, "quick_attack_capture", "Quick Attack Capture",
+                                      f"Seized {', '.join(captured)} from {target_civ['name']}.")
             else:
                 margin = fd / max(1, fa)
                 await self._process_attack_defeat(ctx, user_id, target_id, civ, target_civ, margin, level)
@@ -2204,137 +2942,44 @@ class MilitaryCommands(commands.Cog):
         except Exception as e:
             logger.error(f"attack error: {e}", exc_info=True)
 
-    async def _process_attack_victory(self, ctx, attacker_id, defender_id, attacker_civ,
-                                      defender_civ, margin, level):
-        try:
-            dmg = 0.5 + (level - 1) * (1.5 / 9)
-            att_loss = min(random.randint(2, 8), attacker_civ['military']['soldiers'])
-            def_loss = min(int(att_loss * margin * dmg), defender_civ['military']['soldiers'])
-            spoils = {
-                "gold": min(int(defender_civ['resources']['gold'] * 0.15 * dmg), defender_civ['resources']['gold']),
-                "food": min(int(defender_civ['resources']['food'] * 0.10 * dmg), defender_civ['resources']['food']),
-                "stone": min(int(defender_civ['resources']['stone'] * 0.10 * dmg), defender_civ['resources']['stone']),
-                "wood": min(int(defender_civ['resources']['wood'] * 0.10 * dmg), defender_civ['resources']['wood']),
-            }
-            territory = min(int(defender_civ['territory']['land_size'] * 0.05 * dmg), defender_civ['territory']['land_size'])
-            self.civ_manager.update_military(attacker_id, {"soldiers": -att_loss})
-            self.civ_manager.update_military(defender_id, {"soldiers": -def_loss})
-            self.civ_manager.update_resources(attacker_id, spoils)
-            self.civ_manager.update_resources(defender_id, {r: -a for r, a in spoils.items()})
-            self.civ_manager.update_territory(attacker_id, {"land_size": territory})
-            self.civ_manager.update_territory(defender_id, {"land_size": -territory})
-            embed = create_embed("⚔️ Victory",
-                                 f"**{attacker_civ['name']}** → **{defender_civ['name']}**",
-                                 guilded.Color.green())
-            embed.add_field(name="Losses", value=f"You: {att_loss} | Them: {def_loss}", inline=True)
-            embed.add_field(name="Spoils",
-                            value="\n".join(f"🪙 {format_number(v)} {k}" for k, v in spoils.items() if v > 0) or "None",
-                            inline=True)
-            embed.add_field(name="Territory", value=f"+{format_number(territory)} km²", inline=True)
-            await ctx.send(embed=embed)
-            self.db.log_event(attacker_id, "victory", "Victory", f"Beat {defender_civ['name']}")
-        except Exception as e:
-            logger.error(f"victory processing error: {e}", exc_info=True)
-
-    async def _process_attack_defeat(self, ctx, attacker_id, defender_id, attacker_civ,
-                                     defender_civ, margin, level):
-        try:
-            dmg = 0.5 + (level - 1) * (1.5 / 9)
-            att_loss = min(int(random.randint(5, 15) * margin * dmg), attacker_civ['military']['soldiers'])
-            def_loss = min(random.randint(2, 5), defender_civ['military']['soldiers'])
-            self.civ_manager.update_military(attacker_id, {"soldiers": -att_loss})
-            self.civ_manager.update_military(defender_id, {"soldiers": -def_loss})
-            self.civ_manager.update_population(attacker_id, {"happiness": -10})
-            embed = create_embed("⚔️ Defeat",
-                                 f"**{attacker_civ['name']}** lost to **{defender_civ['name']}**",
-                                 guilded.Color.red())
-            embed.add_field(name="Losses", value=f"You: {att_loss} | Them: {def_loss}", inline=True)
-            await ctx.send(embed=embed)
-            self.db.log_event(attacker_id, "defeat", "Defeat", f"Lost to {defender_civ['name']}")
-        except Exception as e:
-            logger.error(f"defeat processing error: {e}", exc_info=True)
-
     # =================================================================
-    # PART 2 — TACTICAL BATTLE RESOLUTION + AI + SCENARIOS
+    # BATTLE SCENARIOS
     # =================================================================
-
     BATTLE_SCENARIOS = {
         "on_win": {
             "title": "🏆 Victory! What next, commander?",
             "description": "Your forces have broken through the enemy line.",
             "choices": {
-                "pursue": {
-                    "label": "Pursue", "emoji": "🏃",
-                    "desc": "Chase the fleeing enemy. Higher casualties, more spoils.",
-                    "effects": {"extra_spoils_mult": 1.30, "extra_own_losses_mult": 1.20},
-                },
-                "consolidate": {
-                    "label": "Consolidate", "emoji": "🛡️",
-                    "desc": "Hold the line. Fewer own losses, less loot.",
-                    "effects": {"extra_spoils_mult": 0.70, "extra_own_losses_mult": 0.60, "morale_bonus": 5},
-                },
-                "loot": {
-                    "label": "Loot", "emoji": "💰",
-                    "desc": "Take everything of value. Extra gold, less territory.",
-                    "effects": {"extra_gold_mult": 1.50, "territory_mult": 0.30},
-                },
-                "encircle": {
-                    "label": "Encircle", "emoji": "🔗",
-                    "desc": "Push deeper to surround. Chance at an extra province.",
-                    "effects": {"extra_province_chance": 0.25, "extra_own_losses_mult": 1.35},
-                },
+                "pursue": {"label": "Pursue", "emoji": "🏃",
+                           "desc": "Chase the fleeing enemy. Higher casualties, more spoils.",
+                           "effects": {"extra_spoils_mult": 1.30, "extra_own_losses_mult": 1.20}},
+                "consolidate": {"label": "Consolidate", "emoji": "🛡️",
+                                "desc": "Hold the line. Fewer own losses, less loot.",
+                                "effects": {"extra_spoils_mult": 0.70, "extra_own_losses_mult": 0.60, "morale_bonus": 5}},
+                "loot": {"label": "Loot", "emoji": "💰",
+                         "desc": "Take everything of value. Extra gold, less territory.",
+                         "effects": {"extra_gold_mult": 1.50, "territory_mult": 0.30}},
+                "encircle": {"label": "Encircle", "emoji": "🔗",
+                             "desc": "Push deeper to surround. Chance at an extra province.",
+                             "effects": {"extra_province_chance": 0.25, "extra_own_losses_mult": 1.35}},
             },
         },
         "on_loss": {
             "title": "💀 Defeat. What are your orders?",
             "description": "Your attack has collapsed. The enemy is pushing back.",
             "choices": {
-                "retreat": {
-                    "label": "Retreat", "emoji": "🏳️",
-                    "desc": "Fall back. Fewer losses, morale suffers.",
-                    "effects": {"extra_own_losses_mult": 0.50, "morale_bonus": -5, "happiness_change": -3},
-                },
-                "hold": {
-                    "label": "Hold", "emoji": "🛡️",
-                    "desc": "Stand and fight. Take the losses, no retreat.",
-                    "effects": {"extra_own_losses_mult": 1.30, "morale_bonus": 3},
-                },
-                "counter": {
-                    "label": "Counter-attack", "emoji": "⚔️",
-                    "desc": "Throw reserves in for one more push. High risk.",
-                    "effects": {"counter_attack": True, "extra_own_losses_mult": 1.50},
-                },
-                "rally": {
-                    "label": "Rally", "emoji": "📣",
-                    "desc": "Accept the loss but inspire the people.",
-                    "effects": {"extra_own_losses_mult": 1.10, "happiness_change": 8},
-                },
-            },
-        },
-        "on_capture": {
-            "title": "🏴 Province Captured. How do you administer it?",
-            "description": "The province is yours. The choice is how to hold it.",
-            "choices": {
-                "garrison": {
-                    "label": "Garrison", "emoji": "🛡️",
-                    "desc": "Station troops. Higher upkeep, lower resistance.",
-                    "effects": {"extra_soldier_cost": 200, "resistance": 0.20},
-                },
-                "liberate": {
-                    "label": "Liberate", "emoji": "🕊️",
-                    "desc": "Win hearts. No resources gained.",
-                    "effects": {"extra_gold_mult": 0.0, "happiness_change": 10, "resistance": 0.0},
-                },
-                "scorched": {
-                    "label": "Scorched Earth", "emoji": "🔥",
-                    "desc": "Destroy what you can't hold.",
-                    "effects": {"loot_mult": 0.50, "resistance": 0.0, "destroy_resources": 0.30},
-                },
-                "exploit": {
-                    "label": "Exploit", "emoji": "⛏️",
-                    "desc": "Extract everything. High resistance.",
-                    "effects": {"extra_gold_mult": 1.80, "resistance": 0.60},
-                },
+                "retreat": {"label": "Retreat", "emoji": "🏳️",
+                            "desc": "Fall back. Fewer losses, morale suffers.",
+                            "effects": {"extra_own_losses_mult": 0.50, "morale_bonus": -5, "happiness_change": -3}},
+                "hold": {"label": "Hold", "emoji": "🛡️",
+                         "desc": "Stand and fight. Take the losses, no retreat.",
+                         "effects": {"extra_own_losses_mult": 1.30, "morale_bonus": 3}},
+                "counter": {"label": "Counter-attack", "emoji": "⚔️",
+                            "desc": "Throw reserves in for one more push. High risk.",
+                            "effects": {"counter_attack": True, "extra_own_losses_mult": 1.50}},
+                "rally": {"label": "Rally", "emoji": "📣",
+                          "desc": "Accept the loss but inspire the people.",
+                          "effects": {"extra_own_losses_mult": 1.10, "happiness_change": 8}},
             },
         },
     }
@@ -2346,10 +2991,8 @@ class MilitaryCommands(commands.Cog):
             self.strategy_input = guilded.ui.TextInput(
                 label="Your strategy",
                 style=guilded.TextStyle.paragraph,
-                placeholder="e.g. Feign retreat, then swing around the flank through the forest.",
-                min_length=5,
-                max_length=300,
-                required=True,
+                placeholder="e.g. Feign retreat, then swing around the flank.",
+                min_length=5, max_length=300, required=True,
             )
             self.add_item(self.strategy_input)
 
@@ -2361,7 +3004,7 @@ class MilitaryCommands(commands.Cog):
             self.parent_view.choice = "custom"
             for item in self.parent_view.children:
                 item.disabled = True
-            await interaction.response.send_message("✍️ Strategy submitted. AI reviewing...", ephemeral=True)
+            await interaction.response.send_message("✍️ Strategy submitted.", ephemeral=True)
             self.parent_view.stop()
 
     class BattleScenarioView(guilded.ui.View):
@@ -2370,16 +3013,13 @@ class MilitaryCommands(commands.Cog):
             self.user_id = user_id
             self.choice = None
             self.custom_text = None
-
             for key, data in choices.items():
                 button = guilded.ui.Button(
-                    label=data["label"],
-                    emoji=data.get("emoji"),
+                    label=data["label"], emoji=data.get("emoji"),
                     style=guilded.ButtonStyle.primary,
                 )
                 button.callback = self._make_callback(key)
                 self.add_item(button)
-
             custom_btn = guilded.ui.Button(
                 label="Write your own", emoji="✍️",
                 style=guilded.ButtonStyle.secondary,
@@ -2388,13 +3028,11 @@ class MilitaryCommands(commands.Cog):
             self.add_item(custom_btn)
 
         def _make_callback(self, key):
-            async def callback(interaction: guilded.Interaction):
+            async def callback(interaction):
                 if interaction.user.id != self.user_id:
-                    await interaction.response.send_message("Not your battle.", ephemeral=True)
-                    return
+                    await interaction.response.send_message("Not your battle.", ephemeral=True); return
                 if self.choice is not None:
-                    await interaction.response.send_message("Already chosen.", ephemeral=True)
-                    return
+                    await interaction.response.send_message("Already chosen.", ephemeral=True); return
                 self.choice = key
                 for item in self.children:
                     item.disabled = True
@@ -2405,205 +3043,67 @@ class MilitaryCommands(commands.Cog):
                 self.stop()
             return callback
 
-        async def _custom_callback(self, interaction: guilded.Interaction):
+        async def _custom_callback(self, interaction):
             if interaction.user.id != self.user_id:
-                await interaction.response.send_message("Not your battle.", ephemeral=True)
-                return
+                await interaction.response.send_message("Not your battle.", ephemeral=True); return
             if self.choice is not None:
-                await interaction.response.send_message("Already chosen.", ephemeral=True)
-                return
+                await interaction.response.send_message("Already chosen.", ephemeral=True); return
             await interaction.response.send_modal(MilitaryCommands._CustomStrategyModal(self))
-
-    # =================================================================
-    # AI HELPERS
-    # =================================================================
-    def _get_basic_cog(self):
-        return self.bot.get_cog("BasicCommands")
-
-    def _extract_json(self, text):
-        if not text:
-            return None
-        m = re.search(r"\{.*\}", text, re.DOTALL)
-        if not m:
-            return None
-        try:
-            return json.loads(m.group(0))
-        except Exception:
-            return None
-
-    async def _ai_generate_action(self, civ, user_hint):
-        basic = self._get_basic_cog()
-        if not basic:
-            return None
-        divisions = self.db.get_user_divisions(civ.get("user_id", ""))
-        generals = self.db.get_user_generals(civ.get("user_id", ""))
-        wars = self.db.get_wars(user_id=civ.get("user_id", ""), status="ongoing")
-        factions = civ.get("factions", {})
-        tech = self._get_military_tech(civ.get("user_id", ""))
-        doctrine = civ.get("doctrine", "none")
-
-        war_lines = []
-        for w in wars[:5]:
-            opp = w.get("defender_name") if w.get("attacker_id") == civ.get("user_id") else w.get("attacker_name")
-            war_lines.append(f"- vs {opp}")
-        war_text = "\n".join(war_lines) if war_lines else "None"
-        div_size = sum(d.get("size", 0) for d in divisions)
-
-        prompt = f"""You are the strategic AI advisor of "{civ.get('name','Unknown')}".
-President asks: "{user_hint}"
-
-STATE:
-- Gold: {civ['resources'].get('gold',0)} | Food: {civ['resources'].get('food',0)}
-- Soldiers: {civ['military'].get('soldiers',0)} | Spies: {civ['military'].get('spies',0)}
-- Doctrine: {doctrine}
-- Provinces: {len(civ.get('owned_territories', []))} | Happiness: {civ['population'].get('happiness',50)}
-- Ideology: {civ.get('ideology','none')}
-- Factions: M {factions.get('military',50)} / Mer {factions.get('merchant',50)} / P {factions.get('people',50)}
-- Divisions: {len(divisions)} ({div_size} soldiers) | Generals: {len(generals)}
-- Wars:
-{war_text}
-
-Respond ONLY with JSON (no prose):
-{{
-  "action": "attack" | "train_soldiers" | "buysoldiers" | "buyspys" | "buildship" | "buildplane" | "declare_war" | "fortify" | "tax" | "gather" | "none",
-  "target_name": "target civ name or null",
-  "amount": integer or null,
-  "reasoning": "one sentence",
-  "flavor": "one propaganda sentence"
-}}
-"""
-        try:
-            resp = await basic.generate_ai_response([{"role": "user", "content": prompt}])
-            return self._extract_json(resp)
-        except Exception as e:
-            logger.error(f"_ai_generate_action error: {e}")
-            return None
-
-    async def _ai_rate_strategy(self, text, context):
-        basic = self._get_basic_cog()
-        if not basic:
-            return None
-        prompt = f"""Military AI evaluating a commander's strategy.
-
-CONTEXT:
-{context}
-
-STRATEGY: "{text}"
-
-Respond ONLY with JSON:
-{{
-  "score": float between -0.15 and 0.15,
-  "verdict": "one short sentence",
-  "flavor": "one propaganda sentence"
-}}
-"""
-        try:
-            resp = await basic.generate_ai_response([{"role": "user", "content": prompt}])
-            return self._extract_json(resp)
-        except Exception as e:
-            logger.error(f"_ai_rate_strategy error: {e}")
-            return None
-
-    async def _ai_battle_narrative(self, attacker_name, defender_name, result, level, spoils=None):
-        basic = self._get_basic_cog()
-        if not basic:
-            return None
-        spoils_text = ""
-        if spoils:
-            spoils_text = ", ".join(f"{k}: {v}" for k, v in spoils.items() if v)
-        prompt = (
-            f"Write a SHORT (2-3 sentence) wire-service news report about a battle.\n"
-            f"Attacker: {attacker_name}\nDefender: {defender_name}\n"
-            f"Result: {result}\nIntensity: level {level}/10\n"
-            f"{('Spoils: ' + spoils_text) if spoils_text else ''}\n"
-            f"No headers, no markdown."
-        )
-        try:
-            resp = await basic.generate_ai_response([{"role": "user", "content": prompt}])
-            return (resp or "").strip() or None
-        except Exception as e:
-            logger.error(f"_ai_battle_narrative error: {e}")
-            return None
 
     async def _run_scenario(self, ctx, user_id, scenario_key, context_text):
         scenario = self.BATTLE_SCENARIOS.get(scenario_key)
         if not scenario:
             return None
-
         embed = create_embed(
             scenario["title"],
             f"{context_text}\n\n{scenario['description']}\n\n"
-            f"*Pick a pre-made strategy or write your own — the AI will rate it.*",
+            f"*Pick a pre-made strategy or write your own.*",
             guilded.Color.gold(),
         )
         for key, choice in scenario["choices"].items():
             embed.add_field(
                 name=f"{choice['emoji']} {choice['label']}",
-                value=choice["desc"],
-                inline=False,
+                value=choice["desc"], inline=False,
             )
-        embed.set_footer(text="60 seconds. Timeout → default (first choice).")
-
         view = self.BattleScenarioView(int(user_id), scenario["choices"], timeout=60.0)
         await ctx.send(embed=embed, view=view)
         await view.wait()
-
         if view.choice is None:
             first_key = list(scenario["choices"].keys())[0]
             return dict(scenario["choices"][first_key]["effects"])
-
         if view.choice == "custom":
             custom_text = (view.custom_text or "").strip()
             if not custom_text:
                 first_key = list(scenario["choices"].keys())[0]
                 return dict(scenario["choices"][first_key]["effects"])
-
-            async with ctx.typing():
-                rating = await self._ai_rate_strategy(custom_text, context_text)
-
+            rating = await self._ai_rate_tactic(custom_text, context_text)
             if not rating:
-                await ctx.send("⚠️ AI couldn't rate the strategy. Using default.")
                 first_key = list(scenario["choices"].keys())[0]
                 return dict(scenario["choices"][first_key]["effects"])
-
-            try:
-                score = float(rating.get("score", 0))
-            except Exception:
-                score = 0.0
-            score = max(-0.15, min(0.15, score))
-
+            score = float(rating.get("score", 0.5))
+            score = max(0.0, min(1.0, score))
             await ctx.send(embed=create_embed(
                 "🎖️ Strategy Reviewed",
                 f"**Verdict:** {rating.get('verdict','—')}\n"
-                f"**Score:** {score:+.2f} (max ±0.15)\n"
-                f"*{rating.get('flavor','')}*",
+                f"**Score:** {score*100:.0f}/100\n"
+                f"*{rating.get('reasoning','')}*",
                 guilded.Color.purple(),
             ))
             return {
-                "extra_spoils_mult": 1.0 + score,
-                "extra_own_losses_mult": 1.0 - score,
-                "ai_score": score,
+                "extra_spoils_mult": 1.0 + (score - 0.5) * 0.4,
+                "extra_own_losses_mult": 1.0 - (score - 0.5) * 0.3,
             }
-
         choice_data = scenario["choices"].get(view.choice)
         return dict(choice_data["effects"]) if choice_data else None
 
     # =================================================================
-    # TACTICAL RESOLUTION (reads pending_attacks, does the math)
+    # TACTICAL MATH
     # =================================================================
-    def _sum_division_power(self, division_docs: List[Dict[str, Any]],
-                            doctrine: Optional[str]) -> Dict[str, Any]:
-        """Aggregate attack/defense power from a list of division docs.
-
-        Applies role multipliers, doctrine multipliers, combined-arms synergy.
-        Returns {attack, defense, roles, total_size}.
-        """
+    def _sum_division_power(self, division_docs, doctrine):
         attack = 0.0
         defense = 0.0
-        roles_present: List[str] = []
+        roles_present = []
         total_size = 0
-
-        doc_mod = config.DOCTRINES.get(doctrine, {}) if doctrine else {}
 
         for d in division_docs:
             role_key = d.get("type", "")
@@ -2613,38 +3113,58 @@ Respond ONLY with JSON:
             size = int(d.get("size", 0))
             roles_present.append(role_key)
             total_size += size
+            attack += size * role["attack_mult"]
+            defense += size * role["defense_mult"]
 
-            a = size * role["attack_mult"] * doc_mod.get("attack_mult", 1.0)
-            df = size * role["defense_mult"] * doc_mod.get("defense_mult", 1.0)
-            attack += a
-            defense += df
-
-        # Combined arms bonuses
+        synergy_attack_mult = 1.0
+        synergy_defense_mult = 1.0
         applied_synergies = []
         for pair, bonus in config.COMBINED_ARMS.items():
             r1, r2 = pair
             if r1 in roles_present and r2 in roles_present:
                 if "attack" in bonus:
-                    attack *= (1 + bonus["attack"])
+                    synergy_attack_mult *= (1 + bonus["attack"])
                 if "defense" in bonus:
-                    defense *= (1 + bonus["defense"])
+                    synergy_defense_mult *= (1 + bonus["defense"])
                 applied_synergies.append(bonus["name"])
 
         return {
+            "attack_base": attack,
+            "defense_base": defense,
             "attack": attack,
             "defense": defense,
             "roles": roles_present,
             "total_size": total_size,
             "synergies": applied_synergies,
+            "synergy_attack_mult": synergy_attack_mult,
+            "synergy_defense_mult": synergy_defense_mult,
         }
 
-    def _apply_instructions(self, stats: Dict[str, float], instruction_keys: List[str]) -> Tuple[Dict[str, float], List[str]]:
-        """Apply operational instruction effects. Returns updated stats + list of applied names."""
+    def _direction_multiplier(self, direction):
+        if not direction:
+            return 1.0
+        if direction in {"NE", "SE", "SW", "NW"}:
+            return 1.20
+        if direction in {"N", "E", "S", "W"}:
+            return 1.05
+        return 1.0
+
+    def _technique_counter_multiplier(self, attacker_technique, defender_technique):
+        if not attacker_technique or not defender_technique:
+            return 1.0
+        a_def = config.TECHNIQUES.get(attacker_technique, {})
+        d_def = config.TECHNIQUES.get(defender_technique, {})
+        if a_def.get("counter") == defender_technique:
+            return 1.25
+        if d_def.get("counter") == attacker_technique:
+            return 0.80
+        return 1.0
+
+    def _apply_instructions(self, stats, instruction_keys):
         applied = []
         for key in instruction_keys:
             ins = config.OPERATIONAL_INSTRUCTIONS.get(key)
-            if not ins:
-                continue
+            if not ins: continue
             effects = ins.get("effect", {})
             if "attack" in effects:
                 stats["attack"] *= (1 + effects["attack"])
@@ -2655,17 +3175,14 @@ Respond ONLY with JSON:
             applied.append(ins["name"])
         return stats, applied
 
-    def _apply_phases(self, stats: Dict[str, float],
-                      opening: Optional[str], main: Optional[str], exploitation: Optional[str]) -> Tuple[Dict[str, float], List[str]]:
+    def _apply_phases(self, stats, opening, main, exploitation):
         applied = []
         phases = config.BATTLE_PHASES
-
         for key, opts in (("opening", opening), ("main", main), ("exploitation", exploitation)):
             if not key or not opts:
                 continue
             opt = phases.get(key, {}).get("options", {}).get(opts)
-            if not opt:
-                continue
+            if not opt: continue
             eff = opt.get("effect", {})
             for k, v in eff.items():
                 if k in ("attack", "own_attack"):
@@ -2679,36 +3196,31 @@ Respond ONLY with JSON:
             applied.append(opt["name"])
         return stats, applied
 
-    def _apply_general(self, stats: Dict[str, float], general: Optional[Dict[str, Any]]) -> Tuple[Dict[str, float], List[str]]:
+    def _apply_general(self, stats, general):
         if not general:
             return stats, []
         applied = []
         pos = config.GENERAL_POSITIVE_TRAITS.get(general.get("positive_trait"), {})
         neg = config.GENERAL_NEGATIVE_TRAITS.get(general.get("negative_trait"), {})
-
         if pos.get("effect") == "attack_mult_bonus":
             stats["attack"] *= pos["value"]
         elif pos.get("effect") == "defense_mult_bonus":
             stats["defense"] *= pos["value"]
-        elif pos.get("effect") == "morale_recovery_bonus":
-            stats["morale_bonus"] = stats.get("morale_bonus", 0) + 0.15
         if pos.get("name"):
             applied.append(f"✅ {pos['name']}")
-
         if neg.get("effect") == "casualty_mult":
             stats["casualty_mult"] = stats.get("casualty_mult", 1.0) * neg["value"]
         elif neg.get("effect") == "attack_mult_penalty":
             stats["attack"] *= neg["value"]
-        elif neg.get("effect") == "morale_penalty":
-            stats["morale_bonus"] = stats.get("morale_bonus", 0) - 0.10
         if neg.get("name"):
             applied.append(f"⚠️ {neg['name']}")
-
         return stats, applied
 
+    # =================================================================
+    # TACTICAL RESOLUTION — this is where tactics matter most
+    # =================================================================
     @commands.command(name='attackresolve')
     async def resolve_pending_attack(self, ctx, attack_id: str = None):
-        """Resolve a pending tactical order created by `.tactics`."""
         user_id = str(ctx.author.id)
         if not attack_id:
             pending = self.db.get_pending_attacks_for_user(user_id)
@@ -2717,7 +3229,6 @@ Respond ONLY with JSON:
                 return
             await ctx.send(f"Pending orders: {', '.join('`' + p['id'] + '`' for p in pending)}")
             return
-
         order = self.db.get_pending_attack(attack_id)
         if not order:
             await ctx.send("❌ Order not found or expired.")
@@ -2728,11 +3239,9 @@ Respond ONLY with JSON:
         if order.get("status") != "pending":
             await ctx.send(f"❌ Order status: `{order.get('status')}`.")
             return
-
         await self._resolve_tactical_order(ctx, order)
 
-    async def _resolve_tactical_order(self, ctx, order: Dict[str, Any]):
-        """Full tactical resolution for a pending_attacks doc."""
+    async def _resolve_tactical_order(self, ctx, order):
         attacker_id = str(order["attacker_id"])
         defender_id = str(order["defender_id"])
         attacker_civ = self.civ_manager.get_civilization(attacker_id)
@@ -2742,7 +3251,6 @@ Respond ONLY with JSON:
             self.db.delete_pending_attack(order["id"])
             return
 
-        # Validate divisions still exist
         division_docs = []
         for div_id in order.get("division_ids", []):
             d = self.db.get_division(div_id)
@@ -2753,7 +3261,7 @@ Respond ONLY with JSON:
             self.db.delete_pending_attack(order["id"])
             return
 
-        # --- Technique cost ---
+        # Technique cost
         technique = order.get("technique")
         tech_def = config.TECHNIQUES.get(technique, {})
         tech_cost = tech_def.get("cost", {})
@@ -2763,37 +3271,31 @@ Respond ONLY with JSON:
         if tech_cost:
             self.civ_manager.spend_resources(attacker_id, tech_cost)
 
-        # --- Doctrine / mentality ---
         attacker_doctrine = attacker_civ.get("doctrine")
         defender_doctrine = defender_civ.get("doctrine")
         mentality = order.get("mentality", "balanced")
         ment = config.MENTALITIES.get(mentality, config.MENTALITIES["balanced"])
 
-        # --- Attacker stats ---
+        # ===== ATTACKER STACK =====
         att_stats = self._sum_division_power(division_docs, attacker_doctrine)
-        att_stats["casualty_mult"] = (config.DOCTRINES.get(attacker_doctrine, {}).get("casualty_mult", 1.0)
-                                     * ment.get("casualty_mult", 1.0))
+        att_stats["attack_raw"] = att_stats["attack"]
+
+        doc_att = config.DOCTRINES.get(attacker_doctrine, {}).get("attack_mult", 1.0)
+        doc_def = config.DOCTRINES.get(attacker_doctrine, {}).get("defense_mult", 1.0)
+        doc_cas = config.DOCTRINES.get(attacker_doctrine, {}).get("casualty_mult", 1.0)
+        att_stats["attack"] *= doc_att
+        att_stats["defense"] *= doc_def
+        att_stats["attack"] *= tech_def.get("attack_mult", 1.0)
+        att_stats["attack"] *= ment.get("attack_mult", 1.0)
+        att_stats["casualty_mult"] = doc_cas * ment.get("casualty_mult", 1.0)
         att_stats["loot_mult"] = 1.0
 
-        # Technique multipliers
-        if tech_def:
-            att_stats["attack"] *= tech_def.get("attack_mult", 1.0)
-
-        # Mentality multipliers
-        att_stats["attack"] *= ment.get("attack_mult", 1.0)
-
-        # Doctrine attack mult already in sum_division_power
-
-        # General
         general = None
         if order.get("general_id"):
             general = self.db.get_general(order["general_id"])
         att_stats, general_notes = self._apply_general(att_stats, general)
 
-        # Instructions
         att_stats, instr_notes = self._apply_instructions(att_stats, order.get("instructions", []))
-
-        # Phases
         att_stats, phase_notes = self._apply_phases(
             att_stats,
             order.get("phase_opening"),
@@ -2801,38 +3303,69 @@ Respond ONLY with JSON:
             order.get("phase_exploitation"),
         )
 
-        # --- Defender stats (no panel, use doctrine defaults) ---
+        att_stats["attack"] *= att_stats["synergy_attack_mult"]
+        att_stats["defense"] *= att_stats["synergy_defense_mult"]
+
+        dir_mult = self._direction_multiplier(order.get("direction"))
+        att_stats["attack"] *= dir_mult
+
+        # Technique counter against defender's "signature" technique
+        defender_sig_tech = None
+        for tk, t in config.TECHNIQUES.items():
+            if defender_doctrine and defender_doctrine in t.get("doctrines", []):
+                defender_sig_tech = tk
+                break
+        counter_mult = self._technique_counter_multiplier(technique, defender_sig_tech)
+        att_stats["attack"] *= counter_mult
+
+        # ===== AI PLAN BONUS =====
+        ai_score = order.get("ai_plan_score")
+        ai_mult = 1.0
+        if ai_score is not None:
+            try:
+                ai_score = float(ai_score)
+                ai_mult = 1.0 + (ai_score - 0.5) * 0.5  # +/− 25%
+                att_stats["attack"] *= ai_mult
+            except Exception:
+                ai_mult = 1.0
+
+        # ===== DEFENDER STACK =====
         def_division_docs = self.db.get_user_divisions(defender_id)
         def_stats = self._sum_division_power(def_division_docs, defender_doctrine)
-        def_stats["casualty_mult"] = config.DOCTRINES.get(defender_doctrine, {}).get("casualty_mult", 1.0)
-        # Defender is assumed "defensive" — apply defense bonus
-        def_power = def_stats["defense"] * (1 + (config.DOCTRINES.get(defender_doctrine, {}).get("defense_mult", 1.0) - 1))
+        doc_def_def = config.DOCTRINES.get(defender_doctrine, {}).get("defense_mult", 1.0)
+        def_stats["defense"] *= doc_def_def
+        def_stats["defense"] *= def_stats["synergy_defense_mult"]
 
-        # If defender has no divisions, fall back to raw soldiers
+        home_defense_bonus = 1.15
+        def_stats["defense"] *= home_defense_bonus
+
+        border = self._get_border_info(defender_id)
+        if border.get("has_border"):
+            def_stats["defense"] *= 1.25
+
         if not def_division_docs:
-            def_power = defender_civ['military']['soldiers'] * 10 * config.DOCTRINES.get(defender_doctrine, {}).get("defense_mult", 1.0)
+            def_stats["defense"] = (defender_civ['military']['soldiers'] * 10
+                                    * doc_def_def
+                                    * home_defense_bonus)
 
-        # --- Final combat resolution ---
-        att_power = att_stats["attack"] * random.uniform(0.9, 1.1)
-        def_power = def_power * random.uniform(0.9, 1.1)
+        # ===== COMBAT ROLL =====
+        att_power_base = att_stats["attack"]
+        def_power_base = def_stats["defense"]
 
-        # Lucky strike
+        att_power = att_power_base * random.uniform(0.90, 1.10)
+        def_power = def_power_base * random.uniform(0.90, 1.10)
+
         if self.civ_manager.consume_lucky_strike(attacker_id):
             att_power *= 2.0
             await ctx.send("🍀 **Lucky Strike!** Attack power doubled.")
 
-        # Counter check
-        if tech_def.get("counter") and defender_doctrine:
-            # Defender has no technique; skip counter logic for now
-            pass
-
         victory = att_power > def_power
         ratio = (att_power / max(1, def_power)) if victory else (def_power / max(1, att_power))
+        ratio_capped = min(ratio, 8.0)
 
-        # --- Casualties ---
-        base_att_casualty = 0.05 + (0.15 * (1 / max(1, ratio)))
-        base_def_casualty = 0.08 + (0.20 * (1 / max(1, ratio)))
-
+        # ===== CASUALTIES =====
+        base_att_casualty = 0.04 + (0.10 * (1 / max(1, ratio_capped)))
+        base_def_casualty = 0.06 + (0.14 * (1 / max(1, ratio_capped)))
         att_loss_pct = base_att_casualty * att_stats["casualty_mult"]
         def_loss_pct = base_def_casualty
 
@@ -2842,7 +3375,6 @@ Respond ONLY with JSON:
         att_losses = max(1, int(att_total_size * att_loss_pct))
         def_losses = max(1, int(def_total_size * def_loss_pct))
 
-        # Apply losses to divisions
         for d in division_docs:
             portion = d["size"] / max(1, att_total_size)
             loss = int(att_losses * portion)
@@ -2850,9 +3382,9 @@ Respond ONLY with JSON:
             if new_size <= 0:
                 self.db.delete_division(d["id"])
             else:
-                self.db.update_division(d["id"], {"size": new_size, "morale": max(0, d.get("morale", 100) - 10)})
+                self.db.update_division(d["id"], {"size": new_size,
+                                                   "morale": max(0, d.get("morale", 100) - 10)})
 
-        # Defender losses go to raw soldier pool (or spread across defender divisions)
         if def_division_docs:
             for d in def_division_docs:
                 portion = d["size"] / max(1, def_total_size)
@@ -2865,28 +3397,30 @@ Respond ONLY with JSON:
         else:
             self.civ_manager.update_military(defender_id, {"soldiers": -def_losses})
 
-        # --- Result embed (pre-scenario) ---
+        # ===== RESULT EMBED =====
+        result_color = guilded.Color.green() if victory else guilded.Color.red()
         result_embed = create_embed(
             "⚔️ Engagement Resolved" if victory else "💀 Engagement Lost",
             f"**{attacker_civ['name']}** vs **{defender_civ['name']}**\n"
-            f"Direction: {config.ATTACK_DIRECTIONS.get(order.get('direction', 'N'), {}).get('emoji','')} "
-            f"{config.ATTACK_DIRECTIONS.get(order.get('direction', 'N'), {}).get('name','')}\n"
+            f"Direction: {config.ATTACK_DIRECTIONS.get(order.get('direction','N'), {}).get('emoji','')} "
+            f"{config.ATTACK_DIRECTIONS.get(order.get('direction','N'), {}).get('name','')}\n"
             f"Technique: {tech_def.get('emoji','')} {tech_def.get('name','—')}",
-            guilded.Color.green() if victory else guilded.Color.red(),
+            result_color,
         )
         result_embed.add_field(
             name="Attacker",
-            value=(f"Power: {int(att_power):,}\n"
-                   f"Divisions: {len(division_docs)} ({att_total_size:,} troops)\n"
-                   f"Losses: {att_losses:,}\n"
-                   f"Synergies: {', '.join(att_stats.get('synergies', [])[:3]) or '—'}"),
+            value=(f"Base: **{int(att_stats['attack_raw']):,}**\n"
+                   f"Multiplier: **×{(att_power_base / max(1, att_stats['attack_raw'])):.2f}**\n"
+                   f"Final: **{int(att_power):,}**\n"
+                   f"Losses: **{att_losses:,}**"),
             inline=True,
         )
         result_embed.add_field(
             name="Defender",
-            value=(f"Power: {int(def_power):,}\n"
-                   f"Divisions: {len(def_division_docs)}\n"
-                   f"Losses: {def_losses:,}"),
+            value=(f"Base: **{int(def_stats['defense_base']):,}**\n"
+                   f"Multiplier: **×{(def_power_base / max(1, def_stats['defense_base'])):.2f}**\n"
+                   f"Final: **{int(def_power):,}**\n"
+                   f"Losses: **{def_losses:,}**"),
             inline=True,
         )
         if general_notes:
@@ -2894,10 +3428,22 @@ Respond ONLY with JSON:
         if instr_notes:
             result_embed.add_field(name="Instructions", value=" · ".join(instr_notes[:5]), inline=False)
         if phase_notes:
-            result_embed.add_field(name="Phases", value=" · ".join(phase_notes), inline=False)
+            result_embed.add_field(name="Phases", value=" · ".join(phase_notes[:5]), inline=False)
+        if att_stats.get("synergies"):
+            result_embed.add_field(name="Combined Arms",
+                                   value=" · ".join(att_stats["synergies"][:5]), inline=False)
+        if ai_score is not None:
+            result_embed.add_field(
+                name="AI Plan",
+                value=f"Score {ai_score*100:.0f}/100  ·  attack ×{ai_mult:.2f}",
+                inline=False,
+            )
+        result_embed.set_footer(
+            text=f"Tactical: ×{counter_mult:.2f} | Direction: ×{dir_mult:.2f} | AI: ×{ai_mult:.2f}"
+        )
         await ctx.send(embed=result_embed)
 
-        # --- Spoils + scenarios ---
+        # ===== SPOILS + PROVINCE CAPTURE =====
         if victory:
             scenario_eff = await self._run_scenario(
                 ctx, attacker_id, "on_win",
@@ -2906,14 +3452,15 @@ Respond ONLY with JSON:
             loot_mult = att_stats.get("loot_mult", 1.0) * scenario_eff.get("extra_spoils_mult", 1.0)
             territory_mult = scenario_eff.get("territory_mult", 1.0)
             extra_gold = scenario_eff.get("extra_gold_mult", 1.0)
+            loot_ratio_boost = min(2.0, 0.6 + ratio_capped * 0.2)
 
             spoils = {
-                "gold": min(int(defender_civ['resources']['gold'] * 0.10 * loot_mult * extra_gold), defender_civ['resources']['gold']),
-                "food": min(int(defender_civ['resources']['food'] * 0.08 * loot_mult), defender_civ['resources']['food']),
-                "stone": min(int(defender_civ['resources']['stone'] * 0.08 * loot_mult), defender_civ['resources']['stone']),
-                "wood": min(int(defender_civ['resources']['wood'] * 0.08 * loot_mult), defender_civ['resources']['wood']),
+                "gold": min(int(defender_civ['resources']['gold'] * 0.10 * loot_mult * extra_gold * loot_ratio_boost), defender_civ['resources']['gold']),
+                "food": min(int(defender_civ['resources']['food'] * 0.08 * loot_mult * loot_ratio_boost), defender_civ['resources']['food']),
+                "stone": min(int(defender_civ['resources']['stone'] * 0.08 * loot_mult * loot_ratio_boost), defender_civ['resources']['stone']),
+                "wood": min(int(defender_civ['resources']['wood'] * 0.08 * loot_mult * loot_ratio_boost), defender_civ['resources']['wood']),
             }
-            territory = int(defender_civ['territory']['land_size'] * 0.03 * territory_mult)
+            territory = int(defender_civ['territory']['land_size'] * 0.03 * territory_mult * min(2.0, ratio_capped))
 
             self.civ_manager.update_resources(attacker_id, spoils)
             self.civ_manager.update_resources(defender_id, {r: -a for r, a in spoils.items()})
@@ -2922,13 +3469,19 @@ Respond ONLY with JSON:
             self.civ_manager.apply_faction_effects(attacker_id, "battle_victory")
             self.civ_manager.apply_faction_effects(defender_id, "battle_defeat")
 
-            spoils_text = "\n".join(f"🪙 {format_number(v)} {k}" for k, v in spoils.items() if v > 0)
+            spoils_text = "\n".join(f"{k}: {format_number(v)}" for k, v in spoils.items() if v > 0)
             await ctx.send(embed=create_embed(
                 "🏆 Victory!",
                 f"Spoils:\n{spoils_text or 'None'}\n\n"
-                f"Territory gained: {format_number(territory)} km²",
+                f"Land gained: {format_number(territory)} km²",
                 guilded.Color.gold(),
             ))
+
+            # Province capture — no cap, no last-province protection
+            await self._capture_provinces(
+                ctx, attacker_id, defender_id, ratio_capped,
+                order.get("phase_exploitation"), attacker_civ, defender_civ,
+            )
         else:
             scenario_eff = await self._run_scenario(
                 ctx, attacker_id, "on_loss",
@@ -2940,141 +3493,30 @@ Respond ONLY with JSON:
             self.civ_manager.apply_faction_effects(defender_id, "battle_victory")
 
         # AI narrative
-        async with ctx.typing():
-            narrative = await self._ai_battle_narrative(
-                attacker_civ['name'], defender_civ['name'],
-                "attacker victory" if victory else "attacker defeat",
-                level=int(min(10, max(1, att_total_size / 1000))),
-                spoils=None,
+        try:
+            narrative = await self._ai_rate_text(
+                "You are a wire-service reporter. Write 2-3 sentences, no headers.",
+                f"Battle: {attacker_civ['name']} vs {defender_civ['name']}. "
+                f"Result: {'attacker victory' if victory else 'attacker defeat'}. "
+                f"Intensity: {min(10, max(1, int(att_total_size / 1000)))}/10.",
+                max_tokens=120, temperature=0.8,
             )
-        if narrative:
-            await ctx.send(f"📰 {narrative}")
+            if narrative:
+                await ctx.send(f"📰 {narrative.strip()}")
+        except Exception:
+            pass
 
-        # Mark order resolved
-        self.db.update_pending_attack(order["id"], {"status": "resolved",
-                                                     "resolved_at": datetime.utcnow().isoformat()})
+        self.db.update_pending_attack(order["id"], {
+            "status": "resolved",
+            "resolved_at": datetime.utcnow().isoformat(),
+        })
         self.db.log_event(attacker_id, "tactical_attack", "Tactical Attack",
                           f"vs {defender_civ['name']} | {'victory' if victory else 'defeat'}")
         self.db.log_event(defender_id, "tactical_defense", "Tactical Defense",
                           f"vs {attacker_civ['name']} | {'victory' if not victory else 'defeat'}")
 
     # =================================================================
-    # .action — AI DIRECTIVE
-    # =================================================================
-    @commands.command(name='action')
-    async def ai_action(self, ctx, *, hint: str = "What should we do next?"):
-        """Ask the AI to direct your nation. Costs 20% of your current gold."""
-        user_id = str(ctx.author.id)
-        civ = self.civ_manager.get_civilization(user_id)
-        if not civ:
-            await ctx.send("❌ Need a civilization.")
-            return
-        current_gold = civ['resources'].get('gold', 0)
-        if current_gold < 500:
-            await ctx.send(f"❌ Need at least 500 gold for the planning fee.")
-            return
-        fee = max(100, int(current_gold * 0.20))
-        if not self._get_basic_cog():
-            await ctx.send("❌ AI module not loaded.")
-            return
-
-        status_msg = await ctx.send(embed=create_embed(
-            "🧠 Strategic AI Planning...",
-            f"*\"{hint}\"*\n\nPlanning fee: 🪙 {format_number(fee)}",
-            guilded.Color.dark_teal(),
-        ))
-
-        async with ctx.typing():
-            decision = await self._ai_generate_action(civ, hint)
-        if not decision:
-            await status_msg.edit(embed=create_embed(
-                "🧠 AI Unavailable", "No fee charged.", guilded.Color.red()))
-            return
-
-        self.civ_manager.spend_resources(user_id, {"gold": fee})
-
-        action = (decision.get("action") or "none").lower()
-        target_name = decision.get("target_name")
-        amount = decision.get("amount")
-        reasoning = decision.get("reasoning") or "—"
-        flavor = decision.get("flavor") or ""
-
-        plan_embed = create_embed(
-            "🧠 AI Directive Issued",
-            f"**Plan:** `{action}`\n"
-            f"**Target:** {target_name or '—'}\n"
-            f"**Amount:** {amount if amount is not None else '—'}\n\n"
-            f"**Reasoning:** {reasoning}\n"
-            f"*{flavor}*",
-            guilded.Color.dark_green(),
-        )
-        plan_embed.add_field(name="Fee Paid", value=f"🪙 {format_number(fee)}", inline=True)
-        await status_msg.edit(embed=plan_embed)
-
-        executed = []
-        if action == "none":
-            executed.append("🛑 AI advises inaction.")
-        elif action == "buysoldiers":
-            amt = int(amount or 100)
-            cost = amt * config.MILITARY["soldier_buy_cost"]
-            if self.civ_manager.can_afford(user_id, {"gold": cost}):
-                self.civ_manager.spend_resources(user_id, {"gold": cost})
-                self.civ_manager.update_military(user_id, {"soldiers": amt})
-                executed.append(f"⚔️ Bought {format_number(amt)} soldiers.")
-            else:
-                executed.append("⚠️ Can't afford soldiers.")
-        elif action == "buyspys":
-            amt = int(amount or 20)
-            cost = amt * SPY_BUY_COST
-            if self.civ_manager.can_afford(user_id, {"gold": cost}):
-                self.civ_manager.spend_resources(user_id, {"gold": cost})
-                self.civ_manager.update_military(user_id, {"spies": amt})
-                executed.append(f"🕵️ Bought {format_number(amt)} spies.")
-            else:
-                executed.append("⚠️ Can't afford spies.")
-        elif action == "train_soldiers":
-            amt = int(amount or 50)
-            gc = amt * config.MILITARY['train_cost_soldier_gold']
-            fc = amt * config.MILITARY['train_cost_soldier_food']
-            if self.civ_manager.can_afford(user_id, {"gold": gc, "food": fc}):
-                self.civ_manager.spend_resources(user_id, {"gold": gc, "food": fc})
-                self.civ_manager.update_military(user_id, {"soldiers": amt})
-                executed.append(f"🎖️ Trained {format_number(amt)} soldiers.")
-            else:
-                executed.append("⚠️ Can't afford training.")
-        elif action == "tax":
-            self.civ_manager.update_resources(user_id, {"gold": 5000})
-            self.civ_manager.update_population(user_id, {"happiness": -5})
-            executed.append("💰 Emergency tax: +5,000 gold.")
-        elif action == "gather":
-            gains = self.civ_manager.calculate_resource_income(user_id)
-            if gains:
-                self.civ_manager.update_resources(user_id, gains)
-                executed.append(f"🌾 Gathered: {gains}.")
-        elif action == "fortify":
-            gc, sc, wc = 1000, 500, 300
-            if self.civ_manager.can_afford(user_id, {"gold": gc, "stone": sc, "wood": wc}):
-                info = self._get_border_info(user_id)
-                if not info.get("has_border"):
-                    self.civ_manager.spend_resources(user_id, {"gold": gc, "stone": sc, "wood": wc})
-                    self._update_border(user_id, {"has_border": True, "border_strength": 100, "border_soldiers": 0})
-                    executed.append("🛡️ Built border.")
-                else:
-                    self._update_border(user_id, {"border_strength": info.get("border_strength", 0) + 50})
-                    executed.append("🛡️ Reinforced border (+50).")
-        elif action == "declare_war":
-            executed.append("⚔️ AI recommends war — use `.declare <target>`.")
-        elif action == "attack":
-            executed.append("⚔️ AI recommends attack — use `.tactics <target>`.")
-        else:
-            executed.append(f"📜 AI action `{action}` is advisory.")
-
-        await ctx.send(embed=create_embed("🎯 Action Executed", "\n".join(executed), guilded.Color.blue()))
-        self.db.log_event(user_id, "ai_action", "AI Action", f"Action={action}, fee={fee}")
-
-    # =================================================================
-    # LEGACY ATTACK SCENARIO WRAPPERS (quick attack)
-    # Replaces Part 1 versions to add scenarios + narrative
+    # LEGACY VICTORY/DEFEAT PROCESSORS
     # =================================================================
     async def _process_attack_victory(self, ctx, attacker_id, defender_id, attacker_civ,
                                       defender_civ, margin, level):
@@ -3093,7 +3535,6 @@ Respond ONLY with JSON:
             gold_mult = float(scenario_eff.get("extra_gold_mult", 1.0))
             territory_mult = float(scenario_eff.get("territory_mult", 1.0))
             morale_bonus = int(scenario_eff.get("morale_bonus", 0))
-
             att_loss = max(1, int(att_loss * own_loss_mult))
 
             spoils = {
@@ -3114,7 +3555,7 @@ Respond ONLY with JSON:
             if morale_bonus:
                 self.civ_manager.update_population(attacker_id, {"happiness": morale_bonus})
 
-            spoils_text = "\n".join(f"🪙 {format_number(v)} {k}" for k, v in spoils.items() if v > 0)
+            spoils_text = "\n".join(f"{k}: {format_number(v)}" for k, v in spoils.items() if v > 0)
             embed = create_embed("⚔️ Victory",
                                  f"**{attacker_civ['name']}** → **{defender_civ['name']}**",
                                  guilded.Color.green())
@@ -3122,13 +3563,6 @@ Respond ONLY with JSON:
             embed.add_field(name="Spoils", value=spoils_text or "None", inline=True)
             embed.add_field(name="Territory", value=f"+{format_number(territory)} km²", inline=True)
             await ctx.send(embed=embed)
-
-            async with ctx.typing():
-                narrative = await self._ai_battle_narrative(
-                    attacker_civ['name'], defender_civ['name'], "attacker victory", level, spoils)
-            if narrative:
-                await ctx.send(f"📰 {narrative}")
-
             self.db.log_event(attacker_id, "victory", "Victory", f"Beat {defender_civ['name']}")
         except Exception as e:
             logger.error(f"victory wrapper error: {e}", exc_info=True)
@@ -3144,7 +3578,6 @@ Respond ONLY with JSON:
                 ctx, str(attacker_id), "on_loss",
                 f"**{attacker_civ['name']}** was defeated by **{defender_civ['name']}**."
             ) or {}
-
             own_loss_mult = float(scenario_eff.get("extra_own_losses_mult", 1.0))
             happiness_delta = int(scenario_eff.get("happiness_change", 0))
             att_loss = max(1, int(att_loss * own_loss_mult))
@@ -3157,18 +3590,11 @@ Respond ONLY with JSON:
                                  f"**{attacker_civ['name']}** lost to **{defender_civ['name']}**",
                                  guilded.Color.red())
             embed.add_field(name="Losses", value=f"You: {att_loss} | Them: {def_loss}", inline=True)
-            embed.add_field(name="Happiness", value=f"{-10 + happiness_delta}", inline=True)
             await ctx.send(embed=embed)
-
-            async with ctx.typing():
-                narrative = await self._ai_battle_narrative(
-                    attacker_civ['name'], defender_civ['name'], "attacker defeat", level, None)
-            if narrative:
-                await ctx.send(f"📰 {narrative}")
-
             self.db.log_event(attacker_id, "defeat", "Defeat", f"Lost to {defender_civ['name']}")
         except Exception as e:
             logger.error(f"defeat wrapper error: {e}", exc_info=True)
+
 
 async def setup(bot):
     await bot.add_cog(MilitaryCommands(bot))

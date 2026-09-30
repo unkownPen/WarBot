@@ -4,7 +4,7 @@ import logging
 import math
 import os
 import asyncio
-from typing import List, Optional, Set, Dict
+from typing import List, Optional, Set, Dict, Any
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -14,269 +14,115 @@ from bot import config
 
 logger = logging.getLogger(__name__)
 
+
+# =====================================================================
+# HELPER — normalize author ID across prefix and slash
+# =====================================================================
+def _uid(ctx) -> str:
+    """Return the invoking user's ID as a string, works for both ctx types."""
+    if isinstance(ctx, discord.Interaction):
+        return str(ctx.user.id)
+    return str(ctx.author.id)
+
+
+def _display_name(ctx) -> str:
+    if isinstance(ctx, discord.Interaction):
+        return ctx.user.display_name
+    return ctx.author.display_name
+
+
 # =====================================================================
 # HARDCODED COUNTRY AREAS (km²)
-# Includes all Natural Earth variants + modern country names.
-# These are used as fallbacks if province_areas.json is missing.
 # =====================================================================
 AREA_OVERRIDES: Dict[str, float] = {
     # ----- Africa -----
-    "Algeria": 2381741,
-    "Angola": 1246700,
-    "Benin": 112622,
-    "Botswana": 581730,
-    "Burkina Faso": 274200,
-    "Burundi": 27834,
-    "Cabo Verde": 4033,
-    "Cape Verde": 4033,
-    "Cameroon": 475442,
-    "Central African Republic": 622984,
-    "Central African Rep.": 622984,
-    "C.A.R.": 622984,
-    "Chad": 1284000,
-    "Comoros": 2235,
-    "Congo": 342000,
-    "Republic of the Congo": 342000,
-    "Republic of Congo": 342000,
-    "Congo (Brazzaville)": 342000,
-    "DR Congo": 2344858,
-    "Democratic Republic of the Congo": 2344858,
-    "Dem. Rep. Congo": 2344858,
-    "Congo (Kinshasa)": 2344858,
-    "Djibouti": 23200,
-    "Egypt": 1002450,
-    "Equatorial Guinea": 28051,
-    "Eq. Guinea": 28051,
-    "Eritrea": 117600,
-    "Eswatini": 17364,
-    "eSwatini": 17364,
-    "Swaziland": 17364,
-    "Ethiopia": 1104300,
-    "Gabon": 267668,
-    "Gambia": 11295,
-    "Ghana": 238533,
-    "Guinea": 245857,
-    "Guinea-Bissau": 36125,
-    "Ivory Coast": 322463,
-    "Côte d'Ivoire": 322463,
-    "Kenya": 580367,
-    "Lesotho": 30355,
-    "Liberia": 111369,
-    "Libya": 1759540,
-    "Madagascar": 587041,
-    "Malawi": 118484,
-    "Mali": 1240192,
-    "Mauritania": 1030700,
-    "Mauritius": 2040,
-    "Morocco": 446550,
-    "Mozambique": 801590,
-    "Namibia": 824292,
-    "Niger": 1267000,
-    "Nigeria": 923768,
-    "Rwanda": 26338,
-    "Sao Tome and Principe": 964,
-    "Senegal": 196722,
-    "Seychelles": 455,
-    "Sierra Leone": 71740,
-    "Somalia": 637657,
-    "Somaliland": 137600,
-    "South Africa": 1221037,
-    "South Sudan": 644329,
-    "S. Sudan": 644329,
-    "Sudan": 1861484,
-    "Tanzania": 947300,
-    "United Republic of Tanzania": 947300,
-    "Togo": 56785,
-    "Tunisia": 163610,
-    "Uganda": 241038,
-    "Western Sahara": 266000,
-    "W. Sahara": 266000,
-    "Zambia": 752612,
-    "Zimbabwe": 390757,
+    "Algeria": 2381741, "Angola": 1246700, "Benin": 112622, "Botswana": 581730,
+    "Burkina Faso": 274200, "Burundi": 27834, "Cabo Verde": 4033, "Cape Verde": 4033,
+    "Cameroon": 475442, "Central African Republic": 622984, "Central African Rep.": 622984,
+    "C.A.R.": 622984, "Chad": 1284000, "Comoros": 2235,
+    "Congo": 342000, "Republic of the Congo": 342000, "Republic of Congo": 342000,
+    "Congo (Brazzaville)": 342000, "DR Congo": 2344858,
+    "Democratic Republic of the Congo": 2344858, "Dem. Rep. Congo": 2344858,
+    "Congo (Kinshasa)": 2344858, "Djibouti": 23200, "Egypt": 1002450,
+    "Equatorial Guinea": 28051, "Eq. Guinea": 28051, "Eritrea": 117600,
+    "Eswatini": 17364, "eSwatini": 17364, "Swaziland": 17364, "Ethiopia": 1104300,
+    "Gabon": 267668, "Gambia": 11295, "Ghana": 238533, "Guinea": 245857,
+    "Guinea-Bissau": 36125, "Ivory Coast": 322463, "Côte d'Ivoire": 322463,
+    "Kenya": 580367, "Lesotho": 30355, "Liberia": 111369, "Libya": 1759540,
+    "Madagascar": 587041, "Malawi": 118484, "Mali": 1240192, "Mauritania": 1030700,
+    "Mauritius": 2040, "Morocco": 446550, "Mozambique": 801590, "Namibia": 824292,
+    "Niger": 1267000, "Nigeria": 923768, "Rwanda": 26338,
+    "Sao Tome and Principe": 964, "Senegal": 196722, "Seychelles": 455,
+    "Sierra Leone": 71740, "Somalia": 637657, "Somaliland": 137600,
+    "South Africa": 1221037, "South Sudan": 644329, "S. Sudan": 644329,
+    "Sudan": 1861484, "Tanzania": 947300, "United Republic of Tanzania": 947300,
+    "Togo": 56785, "Tunisia": 163610, "Uganda": 241038, "Western Sahara": 266000,
+    "W. Sahara": 266000, "Zambia": 752612, "Zimbabwe": 390757,
 
     # ----- Asia -----
-    "Afghanistan": 652230,
-    "Armenia": 29743,
-    "Azerbaijan": 86600,
-    "Bahrain": 765,
-    "Bangladesh": 147570,
-    "Bhutan": 38394,
-    "Brunei": 5765,
-    "Cambodia": 181035,
-    "China": 9596961,
-    "Cyprus": 9251,
-    "N. Cyprus": 3355,
-    "Georgia": 69700,
-    "India": 3287263,
-    "Indonesia": 1904569,
-    "Iran": 1648195,
-    "Iraq": 438317,
-    "Israel": 20770,
-    "Japan": 377930,
-    "Jordan": 89342,
-    "Kazakhstan": 2724900,
-    "Kuwait": 17818,
-    "Kyrgyzstan": 199951,
-    "Laos": 236800,
-    "Lebanon": 10452,
-    "Malaysia": 329847,
-    "Maldives": 298,
-    "Mongolia": 1564116,
-    "Myanmar": 676578,
-    "Nepal": 147181,
-    "North Korea": 120538,
-    "Dem. Rep. Korea": 120538,
-    "Korea": 100210,
-    "South Korea": 100210,
-    "Oman": 309500,
-    "Pakistan": 881913,
-    "Palestine": 6020,
-    "Philippines": 300000,
-    "Qatar": 11586,
-    "Saudi Arabia": 2149690,
-    "Singapore": 728,
-    "Sri Lanka": 65610,
-    "Syria": 185180,
-    "Taiwan": 36193,
-    "Tajikistan": 143100,
-    "Thailand": 513120,
-    "Timor-Leste": 14874,
-    "Turkey": 783562,
-    "Turkmenistan": 488100,
-    "United Arab Emirates": 83600,
-    "UAE": 83600,
-    "Uzbekistan": 447400,
-    "Vietnam": 331212,
-    "Yemen": 527968,
+    "Afghanistan": 652230, "Armenia": 29743, "Azerbaijan": 86600, "Bahrain": 765,
+    "Bangladesh": 147570, "Bhutan": 38394, "Brunei": 5765, "Cambodia": 181035,
+    "China": 9596961, "Cyprus": 9251, "N. Cyprus": 3355, "Georgia": 69700,
+    "India": 3287263, "Indonesia": 1904569, "Iran": 1648195, "Iraq": 438317,
+    "Israel": 20770, "Japan": 377930, "Jordan": 89342, "Kazakhstan": 2724900,
+    "Kuwait": 17818, "Kyrgyzstan": 199951, "Laos": 236800, "Lebanon": 10452,
+    "Malaysia": 329847, "Maldives": 298, "Mongolia": 1564116, "Myanmar": 676578,
+    "Nepal": 147181, "North Korea": 120538, "Dem. Rep. Korea": 120538,
+    "Korea": 100210, "South Korea": 100210, "Oman": 309500, "Pakistan": 881913,
+    "Palestine": 6020, "Philippines": 300000, "Qatar": 11586,
+    "Saudi Arabia": 2149690, "Singapore": 728, "Sri Lanka": 65610,
+    "Syria": 185180, "Taiwan": 36193, "Tajikistan": 143100, "Thailand": 513120,
+    "Timor-Leste": 14874, "Turkey": 783562, "Turkmenistan": 488100,
+    "United Arab Emirates": 83600, "UAE": 83600, "Uzbekistan": 447400,
+    "Vietnam": 331212, "Yemen": 527968,
 
     # ----- Europe -----
-    "Albania": 28748,
-    "Andorra": 468,
-    "Austria": 83871,
-    "Belarus": 207600,
-    "Belgium": 30528,
-    "Bosnia and Herzegovina": 51197,
-    "Bosnia and Herz.": 51197,
-    "Bulgaria": 110879,
-    "Croatia": 56594,
-    "Czechia": 78867,
-    "Czech Republic": 78867,
-    "Denmark": 43094,
-    "Estonia": 45228,
-    "Faroe Is.": 1393,
-    "Finland": 338424,
-    "France": 551695,
-    "Germany": 357022,
-    "Greece": 131957,
-    "Greenland": 2166086,
-    "Hungary": 93028,
-    "Iceland": 103000,
-    "Ireland": 70273,
-    "Italy": 301340,
-    "Kosovo": 10908,
-    "Latvia": 64589,
-    "Liechtenstein": 160,
-    "Lithuania": 65300,
-    "Luxembourg": 2586,
-    "Malta": 316,
-    "Moldova": 33851,
-    "Monaco": 2,
-    "Montenegro": 13812,
-    "Netherlands": 41850,
-    "North Macedonia": 25713,
-    "Macedonia": 25713,
-    "Norway": 323802,
-    "Poland": 312696,
-    "Portugal": 92090,
-    "Romania": 238397,
-    "Russia": 17098242,
-    "San Marino": 61,
-    "Serbia": 77474,
-    "Slovakia": 49035,
-    "Slovenia": 20273,
-    "Spain": 505990,
-    "Sweden": 450295,
-    "Switzerland": 41284,
-    "Ukraine": 603500,
-    "United Kingdom": 242495,
-    "Vatican": 0.44,
-    "Vatican City": 0.44,
+    "Albania": 28748, "Austria": 83871, "Belarus": 207600, "Belgium": 30528,
+    "Bosnia and Herzegovina": 51197, "Bosnia and Herz.": 51197, "Bulgaria": 110879,
+    "Croatia": 56594, "Czechia": 78867, "Czech Republic": 78867, "Denmark": 43094,
+    "Estonia": 45228, "Faroe Is.": 1393, "Finland": 338424, "France": 551695,
+    "Germany": 357022, "Greece": 131957, "Greenland": 2166086, "Hungary": 93028,
+    "Iceland": 103000, "Ireland": 70273, "Italy": 301340, "Kosovo": 10908,
+    "Latvia": 64589, "Lithuania": 65300, "Luxembourg": 2586, "Moldova": 33851,
+    "Montenegro": 13812, "Netherlands": 41850, "North Macedonia": 25713,
+    "Macedonia": 25713, "Norway": 323802, "Poland": 312696, "Portugal": 92090,
+    "Romania": 238397, "Russia": 17098242, "Serbia": 77474, "Slovakia": 49035,
+    "Slovenia": 20273, "Spain": 505990, "Sweden": 450295, "Switzerland": 41284,
+    "Ukraine": 603500, "United Kingdom": 242495,
 
     # ----- North America -----
-    "Bahamas": 13880,
-    "Barbados": 430,
-    "Belize": 22966,
-    "Canada": 9984670,
-    "Costa Rica": 51100,
-    "Cuba": 109884,
-    "Dominica": 751,
-    "Dominican Republic": 48671,
-    "Dominican Rep.": 48671,
-    "El Salvador": 21041,
-    "Grenada": 344,
-    "Guatemala": 108889,
-    "Haiti": 27750,
-    "Honduras": 112492,
-    "Jamaica": 10991,
-    "Mexico": 1964375,
-    "Nicaragua": 130373,
-    "Panama": 75417,
-    "Saint Kitts and Nevis": 261,
-    "Saint Lucia": 616,
-    "St. Lucia": 616,
-    "Saint Vincent and the Grenadines": 389,
-    "St. Vincent": 389,
-    "Trinidad and Tobago": 5130,
-    "United States": 9833517,
-    "United States of America": 9833517,
-    "USA": 9833517,
-    "US": 9833517,
+    "Bahamas": 13880, "Barbados": 430, "Belize": 22966, "Canada": 9984670,
+    "Costa Rica": 51100, "Cuba": 109884, "Dominica": 751,
+    "Dominican Republic": 48671, "Dominican Rep.": 48671, "El Salvador": 21041,
+    "Grenada": 344, "Guatemala": 108889, "Haiti": 27750, "Honduras": 112492,
+    "Jamaica": 10991, "Mexico": 1964375, "Nicaragua": 130373, "Panama": 75417,
+    "Saint Kitts and Nevis": 261, "St. Kitts and Nevis": 261,
+    "Saint Lucia": 616, "St. Lucia": 616,
+    "Saint Vincent and the Grenadines": 389, "St. Vincent": 389,
+    "Trinidad and Tobago": 5130, "United States": 9833517,
+    "United States of America": 9833517, "USA": 9833517, "US": 9833517,
 
     # ----- South America -----
-    "Argentina": 2780400,
-    "Bolivia": 1098581,
-    "Brazil": 8515767,
-    "Chile": 756102,
-    "Colombia": 1141748,
-    "Ecuador": 283561,
-    "Falkland Is.": 12173,
-    "French Guiana": 83534,
-    "Guyana": 214969,
-    "Paraguay": 406752,
-    "Peru": 1285216,
-    "Suriname": 163820,
-    "Uruguay": 176215,
-    "Venezuela": 912050,
+    "Argentina": 2780400, "Bolivia": 1098581, "Brazil": 8515767, "Chile": 756102,
+    "Colombia": 1141748, "Ecuador": 283561, "Falkland Is.": 12173,
+    "French Guiana": 83534, "Guyana": 214969, "Paraguay": 406752,
+    "Peru": 1285216, "Suriname": 163820, "Uruguay": 176215, "Venezuela": 912050,
 
     # ----- Oceania -----
-    "Australia": 7741220,
-    "Fiji": 18274,
-    "Kiribati": 811,
-    "Marshall Islands": 181,
-    "Marshall Is.": 181,
-    "Micronesia": 702,
-    "Nauru": 21,
-    "New Zealand": 268838,
-    "Palau": 459,
-    "Papua New Guinea": 462840,
-    "Samoa": 2842,
-    "Solomon Islands": 28896,
-    "Solomon Is.": 28896,
-    "Tonga": 747,
-    "Tuvalu": 26,
-    "Vanuatu": 12189,
+    "Australia": 7741220, "Fiji": 18274, "Kiribati": 811,
+    "Marshall Islands": 181, "Marshall Is.": 181, "Micronesia": 702,
+    "Nauru": 21, "New Zealand": 268838, "Palau": 459,
+    "Papua New Guinea": 462840, "Samoa": 2842, "Solomon Islands": 28896,
+    "Solomon Is.": 28896, "Tonga": 747, "Tuvalu": 26, "Vanuatu": 12189,
 
-    # ----- Caribbean + misc small states -----
+    # ----- Caribbean -----
     "Antigua and Barbuda": 442,
-    "St. Kitts and Nevis": 261,
 
-    # ----- Antarctica (no fixed owner) -----
+    # ----- Antarctica -----
     "Antarctica": 14000000,
 }
 
-# Load province_areas.json for any overrides it provides (usually the
-# geojson generator writes more accurate values). Otherwise fall back to
-# the hardcoded dict above.
+# Try to merge with generated province_areas.json (more accurate)
 PROVINCE_AREAS: Dict[str, float] = dict(AREA_OVERRIDES)
 try:
     with open('province_areas.json', 'r') as f:
@@ -290,8 +136,15 @@ except Exception as e:
 
 FORBIDDEN_START_PROVINCES = {"Western Sahara"}
 
+# Countries without geojson data — skipped in climate mapping.
+# These tiny nations lack proper polygons in Natural Earth 110m.
+NO_MAP_DATA_PROVINCES = {
+    "Monaco", "Vatican", "Vatican City", "San Marino",
+    "Liechtenstein", "Andorra", "Malta",
+}
+
 # =====================================================================
-# PROVINCES (states) grouped by subregions
+# PROVINCES grouped by subregion
 # =====================================================================
 PROVINCES: Dict[str, List[str]] = {
     "Eastern Europe": [
@@ -300,17 +153,17 @@ PROVINCES: Dict[str, List[str]] = {
     ],
     "Western Europe": [
         "France", "United Kingdom", "Ireland", "Netherlands",
-        "Belgium", "Luxembourg", "Monaco", "Andorra", "San Marino"
+        "Belgium", "Luxembourg"
     ],
     "Central Europe": [
-        "Germany", "Austria", "Switzerland", "Liechtenstein"
+        "Germany", "Austria", "Switzerland"
     ],
     "Balkans": [
         "Kosovo", "Serbia", "Bosnia and Herzegovina", "Montenegro",
         "Albania", "North Macedonia", "Slovenia", "Croatia"
     ],
     "Southern Europe": [
-        "Portugal", "Spain", "Italy", "Greece", "Malta", "Cyprus"
+        "Portugal", "Spain", "Italy", "Greece", "Cyprus"
     ],
     "Northern Europe": [
         "Norway", "Sweden", "Finland", "Denmark", "Iceland",
@@ -333,7 +186,7 @@ PROVINCES: Dict[str, List[str]] = {
     "Middle East": [
         "Turkey", "Iran", "Iraq", "Syria", "Lebanon", "Israel",
         "Palestine", "Jordan", "Saudi Arabia", "Yemen", "Oman",
-        "United Arab Emirates", "Qatar", "Kuwait",
+        "United Arab Emirates", "Qatar", "Kuwait", "Bahrain",
         "Georgia", "Armenia", "Azerbaijan"
     ],
     "North Africa": [
@@ -359,38 +212,22 @@ PROVINCES: Dict[str, List[str]] = {
         "Angola", "Zambia", "Malawi", "Zimbabwe", "Botswana",
         "Namibia", "South Africa", "Eswatini", "Lesotho"
     ],
-    "Western North America": [
-        "Canada", "United States"
-    ],
-    "Central North America": [
-        "Mexico"
-    ],
-    "Eastern North America": [
-        "United States"
-    ],
+    "Western North America": ["Canada", "United States"],
+    "Central North America": ["Mexico"],
+    "Eastern North America": ["United States"],
     "Mexico": ["Mexico"],
     "Central America": [
         "Guatemala", "Belize", "Honduras", "El Salvador", "Nicaragua",
         "Costa Rica", "Panama"
     ],
-    "Northern South America": [
-        "Venezuela", "Colombia", "Guyana", "Suriname"
-    ],
-    "Western South America": [
-        "Ecuador", "Peru", "Bolivia", "Chile"
-    ],
-    "Eastern South America": [
-        "Brazil"
-    ],
+    "Northern South America": ["Venezuela", "Colombia", "Guyana", "Suriname"],
+    "Western South America": ["Ecuador", "Peru", "Bolivia", "Chile"],
+    "Eastern South America": ["Brazil"],
     "Brazil": ["Brazil"],
-    "Southern Cone": [
-        "Argentina", "Uruguay", "Paraguay"
-    ],
+    "Southern Cone": ["Argentina", "Uruguay", "Paraguay"],
     "Australia": ["Australia"],
     "New Zealand": ["New Zealand"],
-    "Pacific Islands": [
-        "Papua New Guinea"
-    ],
+    "Pacific Islands": ["Papua New Guinea"],
     "Antarctic Peninsula": [],
     "East Antarctica": [],
     "West Antarctica": [],
@@ -447,37 +284,19 @@ SUBREGION_DATA: Dict[str, Dict[str, List[str]]] = {
 # SUBREGION -> CONTINENT
 # =====================================================================
 SUBREGION_TO_CONTINENT: Dict[str, str] = {
-    "Eastern Europe": "Europe",
-    "Western Europe": "Europe",
-    "Central Europe": "Europe",
-    "Balkans": "Europe",
-    "Southern Europe": "Europe",
-    "Northern Europe": "Europe",
-    "Central Asia": "Asia",
-    "Northeast Asia": "Asia",
-    "South Asia": "Asia",
-    "Southeast Asia": "Asia",
-    "Middle East": "Asia",
-    "North Africa": "Africa",
-    "West Africa": "Africa",
-    "Central Africa": "Africa",
-    "East Africa": "Africa",
-    "Southern Africa": "Africa",
-    "Western North America": "North America",
-    "Central North America": "North America",
-    "Eastern North America": "North America",
-    "Mexico": "North America",
-    "Central America": "South America",
-    "Northern South America": "South America",
-    "Western South America": "South America",
-    "Eastern South America": "South America",
-    "Brazil": "South America",
-    "Southern Cone": "South America",
-    "Australia": "Oceania",
-    "New Zealand": "Oceania",
-    "Pacific Islands": "Oceania",
-    "Antarctic Peninsula": "Antarctica",
-    "East Antarctica": "Antarctica",
+    "Eastern Europe": "Europe", "Western Europe": "Europe", "Central Europe": "Europe",
+    "Balkans": "Europe", "Southern Europe": "Europe", "Northern Europe": "Europe",
+    "Central Asia": "Asia", "Northeast Asia": "Asia", "South Asia": "Asia",
+    "Southeast Asia": "Asia", "Middle East": "Asia",
+    "North Africa": "Africa", "West Africa": "Africa", "Central Africa": "Africa",
+    "East Africa": "Africa", "Southern Africa": "Africa",
+    "Western North America": "North America", "Central North America": "North America",
+    "Eastern North America": "North America", "Mexico": "North America",
+    "Central America": "South America", "Northern South America": "South America",
+    "Western South America": "South America", "Eastern South America": "South America",
+    "Brazil": "South America", "Southern Cone": "South America",
+    "Australia": "Oceania", "New Zealand": "Oceania", "Pacific Islands": "Oceania",
+    "Antarctic Peninsula": "Antarctica", "East Antarctica": "Antarctica",
     "West Antarctica": "Antarctica",
 }
 
@@ -485,41 +304,99 @@ SUBREGION_TO_CONTINENT: Dict[str, str] = {
 # SUBREGION -> COUNTRYBALL UNLOCK
 # =====================================================================
 REGION_TO_COUNTRYBALL: Dict[str, Optional[str]] = {
-    "Eastern Europe": "soviet_union",
-    "Western Europe": "reich",
-    "Central Europe": "german_empire",
-    "Balkans": "austria-hungary",
-    "Southern Europe": "italy",
-    "Northern Europe": "british_empire",
-    "Central Asia": "soviet_union",
-    "Northeast Asia": "china",
-    "South Asia": "british_empire",
-    "Southeast Asia": "japanese_empire",
-    "Middle East": "ottoman_empire",
-    "North Africa": "ottoman_empire",
-    "West Africa": "france",
-    "Central Africa": "france",
-    "East Africa": "british_empire",
-    "Southern Africa": "british_empire",
-    "Western North America": "america",
-    "Central North America": "america",
-    "Eastern North America": "america",
-    "Mexico": "america",
-    "Central America": "america",
-    "Northern South America": "america",
-    "Western South America": "america",
-    "Eastern South America": "america",
-    "Brazil": "america",
-    "Southern Cone": "america",
-    "Australia": "british_empire",
-    "New Zealand": "british_empire",
+    "Eastern Europe": "soviet_union", "Western Europe": "reich",
+    "Central Europe": "german_empire", "Balkans": "austria-hungary",
+    "Southern Europe": "italy", "Northern Europe": "british_empire",
+    "Central Asia": "soviet_union", "Northeast Asia": "china",
+    "South Asia": "british_empire", "Southeast Asia": "japanese_empire",
+    "Middle East": "ottoman_empire", "North Africa": "ottoman_empire",
+    "West Africa": "france", "Central Africa": "france",
+    "East Africa": "british_empire", "Southern Africa": "british_empire",
+    "Western North America": "america", "Central North America": "america",
+    "Eastern North America": "america", "Mexico": "america",
+    "Central America": "america", "Northern South America": "america",
+    "Western South America": "america", "Eastern South America": "america",
+    "Brazil": "america", "Southern Cone": "america",
+    "Australia": "british_empire", "New Zealand": "british_empire",
     "Pacific Islands": "british_empire",
-    "Antarctic Peninsula": None,
-    "East Antarctica": None,
-    "West Antarctica": None,
+    "Antarctic Peninsula": None, "East Antarctica": None, "West Antarctica": None,
 }
 
+# =====================================================================
+# TERRAIN / CLIMATE HELPERS — exposed for economy.py
+# =====================================================================
+def get_province_climate(province: str) -> Optional[str]:
+    """Return the climate key for a province, or None if unmapped."""
+    if not province:
+        return None
+    if province in NO_MAP_DATA_PROVINCES:
+        return None
+    return getattr(config, "PROVINCE_CLIMATE", {}).get(province)
 
+
+def get_province_climate_data(province: str) -> Optional[Dict[str, Any]]:
+    """Full climate dict: name, emoji, modifiers, pros, cons, desc."""
+    key = get_province_climate(province)
+    if not key:
+        return None
+    climate_types = getattr(config, "CLIMATE_TYPES", {})
+    data = climate_types.get(key)
+    if not data:
+        return None
+    return {"key": key, **data}
+
+
+def get_sector_modifier(province: str, sector: str) -> float:
+    """Multiplier for a given economy sector on a province.
+
+    `sector` should be one of: farming, mining, industry, trade.
+    Returns 1.0 if the province has no climate.
+    """
+    data = get_province_climate_data(province)
+    if not data:
+        return 1.0
+    return float(data.get("modifiers", {}).get(sector, 1.0))
+
+
+def aggregate_sector_modifier(provinces: List[str], sector: str) -> float:
+    """Average sector modifier across a list of owned provinces.
+
+    Used by economy.py to compute the player's effective terrain bonus.
+    """
+    if not provinces:
+        return 1.0
+    total = 0.0
+    counted = 0
+    for p in provinces:
+        data = get_province_climate_data(p)
+        if data:
+            total += float(data.get("modifiers", {}).get(sector, 1.0))
+            counted += 1
+    if counted == 0:
+        return 1.0
+    return total / counted
+
+
+def format_climate_line(province: str) -> str:
+    """One-line description of a province's climate."""
+    data = get_province_climate_data(province)
+    if not data:
+        if province in NO_MAP_DATA_PROVINCES:
+            return "⚠️ *No map data (tiny nation)*"
+        return "🌐 *Unknown climate*"
+    pros = ", ".join(data.get("pros", []))
+    cons = ", ".join(data.get("cons", []))
+    line = f"{data['emoji']} **{data['name']}**"
+    if pros:
+        line += f"\n  ✅ {pros}"
+    if cons:
+        line += f"\n  ⚠️ {cons}"
+    return line
+
+
+# =====================================================================
+# TERRITORY COG
+# =====================================================================
 class TerritoryCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -528,7 +405,9 @@ class TerritoryCog(commands.Cog):
         self.province_areas = PROVINCE_AREAS
         self._recent_expansions = {}
 
-    # ---- Firestore-based territory helpers ----
+    # =================================================================
+    # FIRESTORE / TERRITORY HELPERS
+    # =================================================================
     def _get_owned_provinces(self, user_id: str) -> List[str]:
         return self.db.get_player_territories(user_id)
 
@@ -576,7 +455,8 @@ class TerritoryCog(commands.Cog):
         target_continent = SUBREGION_TO_CONTINENT.get(target_subregion)
         return target_continent not in owned_continents
 
-    def _apply_expansion_reductions(self, user_id: str, target_subregion: str, resource_cost: dict, soldier_cost: int):
+    def _apply_expansion_reductions(self, user_id: str, target_subregion: str,
+                                     resource_cost: dict, soldier_cost: int):
         has_navy, has_airforce = self._get_navy_and_airforce(user_id)
         is_overseas = self._is_overseas(user_id, target_subregion)
         if is_overseas:
@@ -634,13 +514,21 @@ class TerritoryCog(commands.Cog):
             return set(ALL_PROVINCES)
         return set(self._get_expansion_options(user_id))
 
+    def _get_owned_subregions(self, user_id: str) -> Set[str]:
+        owned = self._get_owned_provinces(user_id)
+        fully_owned = set()
+        for subregion, province_list in PROVINCES.items():
+            if province_list and all(p in owned for p in province_list):
+                fully_owned.add(subregion)
+        return fully_owned
+
     # =================================================================
     # LIST TERRITORIES
     # =================================================================
-
-    @commands.command(name='territories')
+    @commands.hybrid_command(name='territories')
     async def list_territories(self, ctx):
-        user_id = str(ctx.author.id)
+        """List every province you own, with climate summaries."""
+        user_id = _uid(ctx)
         owned = self._get_owned_provinces(user_id)
         if not owned:
             await ctx.send("🌍 You don't own any provinces yet! Use `.expand` to claim your first.")
@@ -649,11 +537,9 @@ class TerritoryCog(commands.Cog):
         embed = discord.Embed(title="🗺️ Your Provinces (States)", color=discord.Color.green())
         embed.add_field(name="Total States", value=f"{len(owned)}", inline=True)
 
-        # Total land size
         total_area = sum(self.province_areas.get(p, 1000) for p in owned)
         embed.add_field(name="Total Land", value=f"{total_area:,.0f} km²", inline=True)
 
-        # Civil war state
         civ = self.civ_manager.get_civilization(user_id)
         cw = (civ or {}).get('civil_war') or {}
         if cw.get('active'):
@@ -664,38 +550,95 @@ class TerritoryCog(commands.Cog):
                 inline=True
             )
 
-        # Show up to 20 territories with their areas
+        # Sector modifiers across owned provinces — help the player see their terrain profile
+        sector_lines = []
+        for sector in ("farming", "mining", "industry", "trade"):
+            avg = aggregate_sector_modifier(owned, sector)
+            arrow = "📈" if avg > 1.05 else ("📉" if avg < 0.95 else "➖")
+            sector_lines.append(f"{arrow} **{sector.capitalize()}** ×{avg:.2f}")
+        embed.add_field(name="🌍 Average Sector Modifiers",
+                        value="\n".join(sector_lines), inline=False)
+
         shown = owned[:20]
         lines = []
         for p in shown:
             area = self.province_areas.get(p, 1000)
-            lines.append(f"• **{p}** ({area:,.0f} km²)")
+            climate = get_province_climate(p)
+            emoji = "🌐"
+            if climate:
+                emoji = getattr(config, "CLIMATE_TYPES", {}).get(climate, {}).get("emoji", "🌐")
+            lines.append(f"{emoji} **{p}** ({area:,.0f} km²)")
         value = "\n".join(lines)
         if len(owned) > 20:
             value += f"\n*...and {len(owned) - 20} more*"
         embed.add_field(name="Owned States", value=value[:1024], inline=False)
+        embed.set_footer(text="Use .terrain <country> for full climate details")
         await ctx.send(embed=embed)
 
-    @commands.command(name='states')
+    @commands.hybrid_command(name='states')
+    @app_commands.describe(country="Name of the country/state to view (optional)")
     async def list_all_states(self, ctx, country: str = None):
+        """Show global state ownership, or details on one country."""
         territories = self.db.get_all_territories()
+
         if country:
-            if country not in ALL_PROVINCES:
-                matches = [p for p in ALL_PROVINCES if country.lower() in p.lower()]
-                if not matches:
-                    await ctx.send(f"❌ No country/state named `{country}` found.")
-                    return
-                country = matches[0]
-            owner_id = territories.get(country, {}).get("owner_id")
-            area = self.province_areas.get(country, 1000)
+            # Match by exact name or substring
+            match = None
+            if country in ALL_PROVINCES:
+                match = country
+            else:
+                cl = country.lower()
+                for p in ALL_PROVINCES:
+                    if cl == p.lower():
+                        match = p
+                        break
+                if not match:
+                    for p in ALL_PROVINCES:
+                        if cl in p.lower():
+                            match = p
+                            break
+            if not match:
+                await ctx.send(f"❌ No country/state named `{country}` found.")
+                return
+
+            owner_id = territories.get(match, {}).get("owner_id")
+            area = self.province_areas.get(match, 1000)
+            embed = discord.Embed(
+                title=f"🌍 {match}",
+                color=discord.Color.blue(),
+            )
+            embed.add_field(name="Area", value=f"{area:,.0f} km²", inline=True)
+            embed.add_field(name="Subregion",
+                            value=PROVINCE_TO_SUBREGION.get(match, "Unknown"),
+                            inline=True)
+
+            # Climate
+            climate_line = format_climate_line(match)
+            embed.add_field(name="Climate", value=climate_line, inline=False)
+
+            # Sector modifiers (visible breakdown)
+            data = get_province_climate_data(match)
+            if data:
+                mod_lines = []
+                for sector in ("farming", "mining", "industry", "trade"):
+                    mult = data.get("modifiers", {}).get(sector, 1.0)
+                    arrow = "📈" if mult > 1.05 else ("📉" if mult < 0.95 else "➖")
+                    mod_lines.append(f"{arrow} {sector.capitalize()}: ×{mult:.2f}")
+                embed.add_field(name="Sector Modifiers",
+                                value="\n".join(mod_lines), inline=False)
+
+            # Owner
             if owner_id:
                 civ = self.civ_manager.get_civilization(owner_id)
                 owner_name = civ['name'] if civ else "Unknown"
-                await ctx.send(f"**{country}** ({area:,.0f} km²) is owned by **{owner_name}**.")
+                embed.add_field(name="Owned by", value=f"**{owner_name}**", inline=False)
             else:
-                await ctx.send(f"**{country}** ({area:,.0f} km²) is unowned.")
+                embed.add_field(name="Owned by", value="*Unowned*", inline=False)
+
+            await ctx.send(embed=embed)
             return
 
+        # Global summary
         embed = discord.Embed(title="🌍 Global State Map", color=discord.Color.blue())
         by_country: Dict[str, List[str]] = {}
         for province, data in territories.items():
@@ -706,6 +649,7 @@ class TerritoryCog(commands.Cog):
             else:
                 owner_name = "Unowned"
             by_country.setdefault(owner_name, []).append(province)
+
         for owner, states in by_country.items():
             if owner == "Unowned":
                 embed.add_field(
@@ -722,13 +666,95 @@ class TerritoryCog(commands.Cog):
         await ctx.send(embed=embed)
 
     # =================================================================
+    # TERRAIN COMMAND (new)
+    # =================================================================
+    @commands.hybrid_command(name='terrain')
+    @app_commands.describe(country="Country to view terrain for (optional — lists all climates if empty)")
+    async def terrain_command(self, ctx, country: str = None):
+        """View climate types and their sector modifiers."""
+        climate_types = getattr(config, "CLIMATE_TYPES", {})
+
+        if not country:
+            embed = discord.Embed(
+                title="🌍 Climate Types",
+                description=("Every province has a climate that heavily modifies your economy.\n"
+                             "**Bold bonuses, bold penalties — your terrain is your destiny.**"),
+                color=discord.Color.teal(),
+            )
+            for key, data in climate_types.items():
+                mods = data.get("modifiers", {})
+                mod_str = " · ".join(
+                    f"{s.capitalize()} ×{m:.2f}" for s, m in mods.items()
+                )
+                embed.add_field(
+                    name=f"{data['emoji']} {data['name']}",
+                    value=f"*{data['desc']}*\n{mod_str}",
+                    inline=False,
+                )
+            embed.set_footer(text="Use .terrain <country> to see a specific nation's climate")
+            await ctx.send(embed=embed)
+            return
+
+        # Match country
+        match = None
+        if country in ALL_PROVINCES:
+            match = country
+        else:
+            cl = country.lower()
+            for p in ALL_PROVINCES:
+                if cl == p.lower():
+                    match = p; break
+            if not match:
+                for p in ALL_PROVINCES:
+                    if cl in p.lower():
+                        match = p; break
+
+        if not match:
+            await ctx.send(f"❌ No country named `{country}` found.")
+            return
+
+        data = get_province_climate_data(match)
+        if not data:
+            if match in NO_MAP_DATA_PROVINCES:
+                await ctx.send(f"⚠️ **{match}** has no map data (tiny nation).")
+            else:
+                await ctx.send(f"⚠️ **{match}** has no climate mapping yet.")
+            return
+
+        mods = data.get("modifiers", {})
+        mod_lines = []
+        for sector in ("farming", "mining", "industry", "trade"):
+            mult = mods.get(sector, 1.0)
+            arrow = "📈" if mult > 1.05 else ("📉" if mult < 0.95 else "➖")
+            mod_lines.append(f"{arrow} **{sector.capitalize()}**: ×{mult:.2f}")
+
+        embed = discord.Embed(
+            title=f"{data['emoji']} {match} — {data['name']}",
+            description=data.get("desc", ""),
+            color=discord.Color.teal(),
+        )
+        embed.add_field(name="Sector Modifiers", value="\n".join(mod_lines), inline=False)
+        pros = data.get("pros", [])
+        cons = data.get("cons", [])
+        if pros:
+            embed.add_field(name="✅ Pros", value="\n".join(f"• {p}" for p in pros), inline=True)
+        if cons:
+            embed.add_field(name="⚠️ Cons", value="\n".join(f"• {c}" for c in cons), inline=True)
+        embed.add_field(
+            name="Area",
+            value=f"{self.province_areas.get(match, 1000):,.0f} km²",
+            inline=True,
+        )
+        await ctx.send(embed=embed)
+
+    # =================================================================
     # EXPAND
     # =================================================================
-
-    @commands.command(name='expand')
+    @commands.hybrid_command(name='expand')
     @app_commands.describe(country="Name of the country to expand into (e.g., 'India', 'Germany')")
-    async def expand(self, ctx, *, country: str = None):
-        user_id = str(ctx.author.id)
+    async def expand(self, ctx, country: str = None):
+        """Claim an unowned province using resources + soldiers."""
+        user_id = _uid(ctx)
         civ = self.civ_manager.get_civilization(user_id)
         if not civ:
             await ctx.send("❌ You need a civilization first! Use `.start`.")
@@ -745,34 +771,40 @@ class TerritoryCog(commands.Cog):
                 if avail:
                     subregion_map[subregion] = avail
             items = list(subregion_map.items())
-            page_size = 20
+            page_size = 15
             pages = [items[i:i + page_size] for i in range(0, len(items), page_size)] or [[]]
             for idx, page in enumerate(pages, 1):
                 embed = discord.Embed(
                     title=f"🌍 Available Countries (Page {idx}/{len(pages)})",
                     description=("Use `.expand <country_name>` to claim a country.\n"
-                                 "Every nation in every subregion is listed below."),
+                                 "Climate emojis show terrain type."),
                     color=discord.Color.blue()
                 )
                 for subregion, countries in page:
-                    value = ", ".join(countries)
+                    parts = []
+                    for c in countries:
+                        climate = get_province_climate(c)
+                        emoji = "🌐"
+                        if climate:
+                            emoji = getattr(config, "CLIMATE_TYPES", {}).get(climate, {}).get("emoji", "🌐")
+                        parts.append(f"{emoji}{c}")
+                    value = ", ".join(parts)
                     if len(value) > 1024:
                         value = value[:1021] + "..."
                     embed.add_field(name=f"📍 {subregion} ({len(countries)})", value=value, inline=False)
-                embed.set_footer(text="Tip: .rapidexpansion <country> uses soldiers only (2× cost)")
+                embed.set_footer(text="Tip: .rapidexpansion <country> uses soldiers only (2× cost) · .terrain <country> for climate")
                 await ctx.send(embed=embed)
             return
 
+        # Match country
         country_match = None
         for p in ALL_PROVINCES:
             if p.lower() == country.lower():
-                country_match = p
-                break
+                country_match = p; break
         if not country_match:
             for p in ALL_PROVINCES:
                 if country.lower() in p.lower():
-                    country_match = p
-                    break
+                    country_match = p; break
         if not country_match:
             await ctx.send(f"❌ Unknown country: `{country}`. Use `.expand` to see available countries.")
             return
@@ -787,8 +819,7 @@ class TerritoryCog(commands.Cog):
             await ctx.send(f"❌ You already own **{country}**.")
             return
 
-        target_state = country
-        target_subregion = PROVINCE_TO_SUBREGION.get(target_state)
+        target_subregion = PROVINCE_TO_SUBREGION.get(country)
         if not target_subregion:
             await ctx.send("❌ State has no subregion mapping. Contact admin.")
             return
@@ -796,10 +827,10 @@ class TerritoryCog(commands.Cog):
         is_overseas = self._is_overseas(user_id, target_subregion)
         has_navy, has_air = self._get_navy_and_airforce(user_id)
         if is_overseas and not has_navy:
-            await ctx.send(f"❌ **{target_state}** is overseas! You need a navy to expand there.")
+            await ctx.send(f"❌ **{country}** is overseas! You need a navy to expand there.")
             return
 
-        area = self.province_areas.get(target_state, 1000)
+        area = self.province_areas.get(country, 1000)
         cost_multiplier = min(math.sqrt(area / 1000), 20.0)
         province_count = len(PROVINCES.get(target_subregion, []))
         base_cost = {
@@ -808,7 +839,8 @@ class TerritoryCog(commands.Cog):
             "wood": config.EXPANSION["base_wood_per_province"] + (10 // max(1, province_count)),
             "stone": config.EXPANSION["base_stone_per_province"] + (10 // max(1, province_count)),
         }
-        resource_cost = {k: int(v * cost_multiplier * config.EXPANSION["resource_cost_multiplier"]) for k, v in base_cost.items()}
+        resource_cost = {k: int(v * cost_multiplier * config.EXPANSION["resource_cost_multiplier"])
+                         for k, v in base_cost.items()}
         soldier_cost = self._calculate_base_soldier_cost(area)
         resource_cost, soldier_cost, reduction_reason = self._apply_expansion_reductions(
             user_id, target_subregion, resource_cost, soldier_cost
@@ -819,15 +851,15 @@ class TerritoryCog(commands.Cog):
             resource_cost = {k: max(1, int(v * scale_factor)) for k, v in resource_cost.items()}
             soldier_cost = max(1, int(soldier_cost * scale_factor))
 
-        repel_chance = 0.25
-        if random.random() < repel_chance:
+        # Repel chance
+        if random.random() < 0.25:
             lost_resources = {k: int(v * 0.3) for k, v in resource_cost.items()}
             lost_soldiers = max(1, int(soldier_cost * 0.3))
             self.civ_manager.spend_resources(user_id, lost_resources)
             self.civ_manager.update_military(user_id, {"soldiers": -lost_soldiers})
             embed = discord.Embed(
                 title="🛡️ Expansion Repelled!",
-                description=f"The defenders of **{target_state}** have repelled your invasion!",
+                description=f"The defenders of **{country}** have repelled your invasion!",
                 color=discord.Color.red()
             )
             embed.add_field(
@@ -840,40 +872,53 @@ class TerritoryCog(commands.Cog):
             )
             embed.add_field(name="Lost Soldiers", value=f"⚔️ {format_number(lost_soldiers)}", inline=True)
             await ctx.send(embed=embed)
-            self.db.log_event(user_id, "expansion_repelled", "Expansion Repelled", f"Repelled from {target_state}")
+            self.db.log_event(user_id, "expansion_repelled", "Expansion Repelled",
+                              f"Repelled from {country}")
             return
 
         if not self.civ_manager.can_afford(user_id, resource_cost):
             cost_str = ", ".join([f"{amt} {res}" for res, amt in resource_cost.items()])
-            await ctx.send(f"❌ Cannot afford to claim **{target_state}**. Requires: {cost_str}.")
+            await ctx.send(f"❌ Cannot afford to claim **{country}**. Requires: {cost_str}.")
             return
         if civ['military']['soldiers'] < soldier_cost:
-            await ctx.send(f"❌ You need at least {soldier_cost} soldiers to claim **{target_state}**! You have {civ['military']['soldiers']}.")
+            await ctx.send(f"❌ You need at least {soldier_cost} soldiers to claim **{country}**! "
+                           f"You have {civ['military']['soldiers']}.")
             return
 
         self.civ_manager.spend_resources(user_id, resource_cost)
         self.civ_manager.update_military(user_id, {"soldiers": -soldier_cost})
 
-        if self._add_province(user_id, target_state, ctx):
+        if self._add_province(user_id, country, ctx):
             embed = discord.Embed(
                 title="🏹 Expansion Successful!",
-                description=f"**{civ['name']}** has conquered **{target_state}**!",
+                description=f"**{civ['name']}** has conquered **{country}**!",
                 color=discord.Color.green()
             )
             cost_display = ", ".join([f"{amt} {res}" for res, amt in resource_cost.items()])
             embed.add_field(name="Cost", value=cost_display + f"\n⚔️ {soldier_cost} soldiers", inline=True)
             embed.add_field(name="Area Added", value=f"+{area:,.0f} km²", inline=True)
             embed.add_field(name="Reduction Applied", value=reduction_reason, inline=False)
-            embed.add_field(name="Overseas", value="✅" if is_overseas else "❌", inline=True)
+
+            # Show climate
+            data = get_province_climate_data(country)
+            if data:
+                embed.add_field(
+                    name=f"{data['emoji']} Climate: {data['name']}",
+                    value=" · ".join(f"{s.capitalize()} ×{m:.2f}"
+                                     for s, m in data.get("modifiers", {}).items()),
+                    inline=False,
+                )
             await ctx.send(embed=embed)
-            self.db.log_event(user_id, "expansion", "State Claimed", f"Claimed {target_state} (overseas: {is_overseas})")
+            self.db.log_event(user_id, "expansion", "State Claimed",
+                              f"Claimed {country} (overseas: {is_overseas})")
         else:
             await ctx.send("❌ Failed to claim state. Please try again.")
 
-    @commands.command(name='rapidexpansion')
+    @commands.hybrid_command(name='rapidexpansion')
     @app_commands.describe(country="Name of the country to expand into")
-    async def rapid_expansion(self, ctx, *, country: str = None):
-        user_id = str(ctx.author.id)
+    async def rapid_expansion(self, ctx, country: str = None):
+        """Claim a province using only soldiers (2× cost)."""
+        user_id = _uid(ctx)
         civ = self.civ_manager.get_civilization(user_id)
         if not civ:
             await ctx.send("❌ You need a civilization first! Use `.start`.")
@@ -886,7 +931,7 @@ class TerritoryCog(commands.Cog):
                 return
             embed = discord.Embed(
                 title="⚡ Rapid Expansion",
-                description="Use `.rapidexpansion <country_name>` to expand using only soldiers (2x cost).",
+                description="Use `.rapidexpansion <country_name>` to expand using only soldiers (2× cost).",
                 color=discord.Color.orange()
             )
             embed.add_field(
@@ -900,13 +945,11 @@ class TerritoryCog(commands.Cog):
         country_match = None
         for p in ALL_PROVINCES:
             if p.lower() == country.lower():
-                country_match = p
-                break
+                country_match = p; break
         if not country_match:
             for p in ALL_PROVINCES:
                 if country.lower() in p.lower():
-                    country_match = p
-                    break
+                    country_match = p; break
         if not country_match:
             await ctx.send(f"❌ Unknown country: `{country}`.")
             return
@@ -921,18 +964,17 @@ class TerritoryCog(commands.Cog):
             await ctx.send(f"❌ You already own **{country}**.")
             return
 
-        target_state = country
-        target_subregion = PROVINCE_TO_SUBREGION.get(target_state)
+        target_subregion = PROVINCE_TO_SUBREGION.get(country)
         if not target_subregion:
             await ctx.send("❌ State has no subregion mapping.")
             return
         is_overseas = self._is_overseas(user_id, target_subregion)
         has_navy, _ = self._get_navy_and_airforce(user_id)
         if is_overseas and not has_navy:
-            await ctx.send(f"❌ **{target_state}** is overseas! You need a navy.")
+            await ctx.send(f"❌ **{country}** is overseas! You need a navy.")
             return
 
-        area = self.province_areas.get(target_state, 1000)
+        area = self.province_areas.get(country, 1000)
         soldier_cost = self._calculate_base_soldier_cost(area) * 2
         soldier_cost = min(soldier_cost, config.EXPANSION["rapid_max_soldier_cost"])
         owned_count = len(owned)
@@ -945,7 +987,7 @@ class TerritoryCog(commands.Cog):
             self.civ_manager.update_military(user_id, {"soldiers": -lost_soldiers})
             embed = discord.Embed(
                 title="🛡️ Expansion Repelled!",
-                description=f"The defenders of **{target_state}** repelled your rapid invasion!",
+                description=f"The defenders of **{country}** repelled your rapid invasion!",
                 color=discord.Color.red()
             )
             embed.add_field(name="Lost Soldiers", value=f"⚔️ {format_number(lost_soldiers)}", inline=True)
@@ -958,29 +1000,37 @@ class TerritoryCog(commands.Cog):
 
         self.civ_manager.update_military(user_id, {"soldiers": -soldier_cost})
 
-        if self._add_province(user_id, target_state, ctx):
+        if self._add_province(user_id, country, ctx):
             embed = discord.Embed(
                 title="⚡ Rapid Expansion Successful!",
-                description=f"**{civ['name']}** has rapidly conquered **{target_state}** using {soldier_cost} soldiers!",
+                description=f"**{civ['name']}** has rapidly conquered **{country}** using {soldier_cost} soldiers!",
                 color=discord.Color.gold()
             )
             embed.add_field(name="Soldiers Spent", value=f"⚔️ {format_number(soldier_cost)}", inline=True)
             embed.add_field(name="Area Added", value=f"+{area:,.0f} km²", inline=True)
-            embed.add_field(name="Overseas", value="✅" if is_overseas else "❌", inline=True)
+
+            data = get_province_climate_data(country)
+            if data:
+                embed.add_field(
+                    name=f"{data['emoji']} Climate: {data['name']}",
+                    value=" · ".join(f"{s.capitalize()} ×{m:.2f}"
+                                     for s, m in data.get("modifiers", {}).items()),
+                    inline=False,
+                )
             await ctx.send(embed=embed)
-            self.db.log_event(user_id, "rapid_expansion", "Rapid Expansion", f"Rapidly claimed {target_state}")
+            self.db.log_event(user_id, "rapid_expansion", "Rapid Expansion",
+                              f"Rapidly claimed {country}")
         else:
             await ctx.send("❌ Failed to claim state. Please try again.")
 
     # =================================================================
     # CIVIL WAR — RECLAIM & STATUS
     # =================================================================
-
-    @commands.command(name='reclaim')
+    @commands.hybrid_command(name='reclaim')
     @app_commands.describe(territory="Specific rebel territory to attack (optional)")
-    async def reclaim_territory(self, ctx, *, territory: str = None):
+    async def reclaim_territory(self, ctx, territory: str = None):
         """Fight a rebel-held territory during a civil war. +30% offensive boost applies."""
-        user_id = str(ctx.author.id)
+        user_id = _uid(ctx)
         civ = self.civ_manager.get_civilization(user_id)
         if not civ:
             await ctx.send("❌ You need a civilization first!")
@@ -1000,13 +1050,11 @@ class TerritoryCog(commands.Cog):
         if territory:
             for r in rebel_territories:
                 if r.lower() == territory.lower():
-                    target = r
-                    break
+                    target = r; break
             if not target:
                 for r in rebel_territories:
                     if territory.lower() in r.lower():
-                        target = r
-                        break
+                        target = r; break
             if not target:
                 await ctx.send(
                     f"❌ **{territory}** is not a rebel-held territory.\n"
@@ -1050,14 +1098,15 @@ class TerritoryCog(commands.Cog):
             embed.add_field(name="Soldier Losses", value=f"⚔️ {format_number(result['soldier_losses'])}", inline=True)
             embed.add_field(name="Rebel Strength Now", value=f"🏴 {result['rebel_strength']}", inline=True)
             if result.get("captured"):
-                embed.add_field(name="😱 Territory Lost!", value=f"Rebels captured **{result['captured']}**!", inline=False)
+                embed.add_field(name="😱 Territory Lost!",
+                                value=f"Rebels captured **{result['captured']}**!", inline=False)
             embed.set_footer(text="Rebel strength increased. Try again with more soldiers.")
             await ctx.send(embed=embed)
 
-    @commands.command(name='civilwar')
+    @commands.hybrid_command(name='civilwar')
     async def civil_war_status(self, ctx):
         """Show your current civil war status."""
-        user_id = str(ctx.author.id)
+        user_id = _uid(ctx)
         civ = self.civ_manager.get_civilization(user_id)
         if not civ:
             await ctx.send("❌ You need a civilization first!")
@@ -1091,21 +1140,12 @@ class TerritoryCog(commands.Cog):
         embed.set_footer(text="Use .reclaim <territory> to fight. You have a +30% offensive bonus.")
         await ctx.send(embed=embed)
 
-    # =================================================================
-    # HELPERS
-    # =================================================================
 
-    def _get_owned_subregions(self, user_id: str) -> Set[str]:
-        owned = self._get_owned_provinces(user_id)
-        fully_owned = set()
-        for subregion, province_list in PROVINCES.items():
-            if province_list and all(p in owned for p in province_list):
-                fully_owned.add(subregion)
-        return fully_owned
-
-
+# =====================================================================
+# CIVIL WAR AI NEWS (exported)
+# =====================================================================
 async def start_civil_war_ai_news(bot, channel, civ_name, state):
-    """Helper exposed for the civil war AI news generation from economy.py."""
+    """Helper exposed for civil war AI news generation from economy.py."""
     try:
         openrouter_key = os.getenv("OPENROUTER")
         article = await asyncio.to_thread(

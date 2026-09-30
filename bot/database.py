@@ -198,6 +198,9 @@ class Database:
                 "bank": {"deposits": 0, "loan": 0, "loan_opened_at": None,
                          "last_interest": None, "credit_score": 100, "locked_until": None},
                 "puppets": [], "overlord_id": None,
+                # ── NEW ──
+                "workforce": {"farming": 0, "mining": 0, "industry": 0, "trade": 0},
+                "tools": [],
             }
             for k, v in defaults.items():
                 data.setdefault(k, v)

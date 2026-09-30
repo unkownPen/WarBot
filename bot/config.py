@@ -2,50 +2,59 @@
 # All game balance parameters in one place.
 
 # ================================================================
-# ECONOMY GAINS
+# ECONOMY GAINS (rebalanced for workforce scaling)
 # ================================================================
 ECONOMY = {
-    "gather_base_min": 12, "gather_base_max": 50, "gather_chance": 0.75,
-    "gather_employment_coeff": 0.5, "gather_cap": 2000000,
+    # ---- Base per-action yields (used as fallback when workforce is empty) ----
+    "gather_base_min": 8, "gather_base_max": 30, "gather_chance": 0.75,
+    "gather_employment_coeff": 0.4, "gather_cap": 500_000,
 
-    "work_gold_per_citizen_min": 4, "work_gold_per_citizen_max": 12,
-    "work_employment_coeff": 0.5, "work_cap": 5000000,
+    "work_gold_per_citizen_min": 3, "work_gold_per_citizen_max": 8,
+    "work_employment_coeff": 0.4, "work_cap": 1_000_000,
 
-    "farm_base_min": 25, "farm_base_max": 100, "farm_citizen_divisor": 15,
-    "farm_employment_coeff": 0.5, "farm_cap": 2000000,
+    # Base values are LOW now — workforce multipliers scale them up dramatically
+    "farm_base_min": 15, "farm_base_max": 50, "farm_citizen_divisor": 20,
+    "farm_employment_coeff": 0.4, "farm_cap": 200_000,
 
-    "mine_stone_base_min": 24, "mine_stone_base_max": 90,
-    "mine_wood_base_min": 15, "mine_wood_base_max": 60,
-    "mine_employment_coeff": 0.5,
-    "mine_stone_cap": 1000000, "mine_wood_cap": 1000000,
+    "mine_stone_base_min": 12, "mine_stone_base_max": 40,
+    "mine_wood_base_min": 8, "mine_wood_base_max": 30,
+    "mine_employment_coeff": 0.4,
+    "mine_stone_cap": 150_000, "mine_wood_cap": 150_000,
     "mine_bonus_gold_chance": 0.25, "mine_bonus_gold_min": 10,
-    "mine_bonus_gold_max": 50, "mine_bonus_gold_cap": 50000,
+    "mine_bonus_gold_max": 50, "mine_bonus_gold_cap": 25_000,
 
-    "harvest_base_min": 120, "harvest_base_max": 300,
-    "harvest_citizen_divisor": 8, "harvest_happiness_divisor": 3,
-    "harvest_employment_coeff": 0.5, "harvest_cap": 5000000,
+    "harvest_base_min": 60, "harvest_base_max": 180,
+    "harvest_citizen_divisor": 10, "harvest_happiness_divisor": 4,
+    "harvest_employment_coeff": 0.4, "harvest_cap": 500_000,
 
-    "drill_minerals_min": 50, "drill_minerals_max": 180,
-    "drill_employment_coeff": 0.5,
-    "drill_gold_cap": 8000000, "drill_stone_cap": 4000000,
+    "drill_minerals_min": 30, "drill_minerals_max": 100,
+    "drill_employment_coeff": 0.4,
+    "drill_gold_cap": 500_000, "drill_stone_cap": 250_000,
     "drill_bonus_gold_chance": 0.2,
     "drill_bonus_gold_min": 150, "drill_bonus_gold_max": 600,
 
-    "fish_food_base_min": 20, "fish_food_base_max": 60,
+    "fish_food_base_min": 12, "fish_food_base_max": 40,
     "fish_treasure_base_min": 30, "fish_treasure_base_max": 180,
-    "fish_employment_coeff": 0.5, "fish_cap": 1000000,
+    "fish_employment_coeff": 0.4, "fish_cap": 200_000,
 
     "tax_base_per_citizen": 1, "tax_employment_coeff": 0.3,
     "tax_happiness_penalty": -5, "tax_fascism_extra_penalty": -8,
-    "tax_cap": 600000, "tax_population_loss_threshold": 50,
+    "tax_cap": 600_000, "tax_population_loss_threshold": 50,
     "tax_population_loss_chance": 0.35,
     "tax_population_loss_min": 10, "tax_population_loss_max": 30,
+    # Tax rate system — new
+    "tax_rates": {
+        "low":    {"mult": 0.50, "happiness": -2, "label": "Low"},
+        "normal": {"mult": 1.00, "happiness": -5, "label": "Normal"},
+        "high":   {"mult": 1.60, "happiness": -12, "label": "High"},
+        "brutal": {"mult": 2.50, "happiness": -25, "label": "Brutal"},
+    },
 
     "raid_gold_min": 400, "raid_gold_max": 1200,
     "raid_food_min": 200, "raid_food_max": 500,
     "raid_wood_min": 100, "raid_wood_max": 300,
     "raid_stone_min": 80, "raid_stone_max": 250,
-    "raid_employment_coeff": 0.6, "raid_cap": 8000000,
+    "raid_employment_coeff": 0.6, "raid_cap": 8_000_000,
     "raid_bonus_gold_chance": 0.15,
     "raid_bonus_gold_min": 500, "raid_bonus_gold_max": 1500,
     "raid_min_soldiers": 5,
@@ -54,14 +63,14 @@ ECONOMY = {
     "labor_food_min": 200, "labor_food_max": 500,
     "labor_wood_min": 200, "labor_wood_max": 500,
     "labor_stone_min": 150, "labor_stone_max": 400,
-    "labor_employment_coeff": 0.6, "labor_cap": 3000000,
+    "labor_employment_coeff": 0.6, "labor_cap": 3_000_000,
     "labor_happiness_cost": -8, "labor_min_soldiers": 5,
 
     "advertise_citizen_min": 300, "advertise_citizen_max": 900,
-    "advertise_employment_coeff": 0.6, "advertise_cap": 20000,
+    "advertise_employment_coeff": 0.6, "advertise_cap": 20_000,
     "advertise_cost": 50,
     "immigration_citizen_min": 250, "immigration_citizen_max": 700,
-    "immigration_employment_coeff": 0.5, "immigration_cap": 2500,
+    "immigration_employment_coeff": 0.5, "immigration_cap": 2_500,
     "immigration_happiness_loss_min": 8, "immigration_happiness_loss_max": 18,
     "immigration_riot_chance": 0.25,
     "immigration_riot_happiness_loss_min": 6,
@@ -72,7 +81,7 @@ ECONOMY = {
     "sell_common_min": 250, "sell_common_max": 600,
     "sell_rare_min": 700, "sell_rare_max": 1500,
     "sell_legendary_min": 1200, "sell_legendary_max": 2500,
-    "sell_cap": 50000,
+    "sell_cap": 50_000,
 }
 
 EXPANSION = {
@@ -85,6 +94,603 @@ EXPANSION = {
     "resource_cost_multiplier": 0.75,
 }
 
+# ================================================================
+# WORKFORCE — sector-based economy (new)
+# ================================================================
+WORKFORCE = {
+    "sectors": {
+        "farming": {
+            "name": "Farming", "emoji": "🌾",
+            "desc": "Food production. Feeds the nation and its armies.",
+            "primary_resource": "food",
+            "base_yield_per_worker": 4.0,
+        },
+        "mining": {
+            "name": "Mining", "emoji": "⛏️",
+            "desc": "Stone and wood extraction. Fuels industry.",
+            "primary_resource": "stone",
+            "base_yield_per_worker": 3.5,
+        },
+        "industry": {
+            "name": "Industry", "emoji": "🏭",
+            "desc": "Converts raw materials into goods and gold.",
+            "primary_resource": "gold",
+            "base_yield_per_worker": 3.0,
+        },
+        "trade": {
+            "name": "Trade", "emoji": "💼",
+            "desc": "Direct gold income. Amplified by coasts and cities.",
+            "primary_resource": "gold",
+            "base_yield_per_worker": 3.5,
+        },
+    },
+
+    # Diminishing returns per sector — each tier covers a range
+    "tiers": [
+        {"up_to": 10,   "mult": 1.00, "label": "Full yield"},
+        {"up_to": 50,   "mult": 0.70, "label": "70% yield"},
+        {"up_to": 150,  "mult": 0.45, "label": "45% yield"},
+        {"up_to": 500,  "mult": 0.30, "label": "30% yield"},
+        {"up_to": None, "mult": 0.20, "label": "20% yield (diminishing)"},
+    ],
+
+    # Minimum citizens that can't be unassigned (government overhead)
+    "min_unassigned": 5,
+
+    # Ideology modifiers per sector
+    "ideology_mods": {
+        "fascism":     {"industry": 1.20, "trade": 0.85, "mining": 1.05, "farming": 1.00},
+        "democracy":   {"trade": 1.15, "farming": 1.00, "industry": 1.00, "mining": 0.95},
+        "communism":   {"farming": 1.15, "industry": 1.05, "trade": 0.80, "mining": 1.00},
+        "theocracy":   {"farming": 1.10, "trade": 0.95, "industry": 0.95, "mining": 0.95},
+        "anarchy":     {"mining": 1.15, "trade": 1.10, "farming": 0.90, "industry": 0.90},
+        "destruction": {"industry": 1.35, "mining": 1.10, "farming": 0.75, "trade": 0.70},
+        "pacifist":    {"farming": 1.20, "trade": 1.15, "industry": 0.85, "mining": 0.90},
+        "socialism":   {"farming": 1.10, "industry": 1.10, "trade": 0.90, "mining": 1.00},
+        "terrorism":   {"mining": 1.10, "industry": 1.15, "trade": 0.80, "farming": 0.80},
+        "capitalism":  {"trade": 1.30, "industry": 1.05, "farming": 0.90, "mining": 0.95},
+        "federalism":  {"trade": 1.10, "farming": 1.05, "industry": 1.05, "mining": 1.00},
+        "monarchy":    {"farming": 1.10, "industry": 1.05, "trade": 1.00, "mining": 1.05},
+    },
+}
+
+# ================================================================
+# TOOLS — permanent buyable upgrades for economy commands (new)
+# ================================================================
+TOOLS = {
+    # ---- Tier 1 (basic) ----
+    "hoe": {
+        "name": "Iron Hoe", "emoji": "🪓",
+        "cost": 5_000,
+        "boosts": {"farm": 0.15},
+        "desc": "+15% farm yield",
+    },
+    "pickaxe": {
+        "name": "Iron Pickaxe", "emoji": "⛏️",
+        "cost": 8_000,
+        "boosts": {"mine": 0.20},
+        "desc": "+20% mine yield",
+    },
+    "fishing_rod": {
+        "name": "Steel Fishing Rod", "emoji": "🎣",
+        "cost": 12_000,
+        "boosts": {"fish": 0.25},
+        "desc": "+25% fish yield",
+    },
+    "ledger": {
+        "name": "Merchant Ledger", "emoji": "📒",
+        "cost": 20_000,
+        "boosts": {"tax": 0.10, "market_sell": 0.10},
+        "desc": "+10% tax, +10% market sell price",
+    },
+    "cart": {
+        "name": "Ox Cart", "emoji": "🐂",
+        "cost": 18_000,
+        "boosts": {"gather": 0.25, "work": 0.15},
+        "desc": "+25% gather, +15% work yield",
+    },
+    "smugglers_map": {
+        "name": "Smuggler's Map", "emoji": "🗺️",
+        "cost": 50_000,
+        "boosts": {"smuggle": 0.20, "smuggle_detection": -0.10},
+        "desc": "+20% smuggle yield, −10% detection chance",
+    },
+
+    # ---- Tier 2 (advanced, cost 50K+) ----
+    "tractor": {
+        "name": "Tractor", "emoji": "🚜",
+        "cost": 75_000,
+        "boosts": {"farm": 0.30, "harvest": 0.30},
+        "desc": "+30% farm and harvest yield",
+        "requires": "hoe",
+    },
+    "power_drill": {
+        "name": "Power Drill", "emoji": "🔨",
+        "cost": 85_000,
+        "boosts": {"mine": 0.35, "drill": 0.25},
+        "desc": "+35% mine, +25% drill yield",
+        "requires": "pickaxe",
+    },
+    "refinery_license": {
+        "name": "Refinery License", "emoji": "📜",
+        "cost": 100_000,
+        "boosts": {"refine": 0.20},
+        "desc": "+20% refine output",
+    },
+    "trade_charter": {
+        "name": "Trade Charter", "emoji": "🏛️",
+        "cost": 120_000,
+        "boosts": {"market_buy": 0.10, "market_sell": 0.15, "globaltrade": 0.20},
+        "desc": "−10% market buy price, +15% market sell price",
+        "requires": "ledger",
+    },
+
+    # ---- Tier 3 (endgame, cost 250K+) ----
+    "titanium_pickaxe": {
+        "name": "Titanium Pickaxe", "emoji": "⚒️",
+        "cost": 250_000,
+        "boosts": {"mine": 0.50, "drill": 0.40},
+        "desc": "+50% mine, +40% drill (replaces Power Drill bonus)",
+        "requires": "power_drill",
+    },
+    "industrial_combine": {
+        "name": "Industrial Combine", "emoji": "🏗️",
+        "cost": 300_000,
+        "boosts": {"industry": 0.35, "refine": 0.25},
+        "desc": "+35% industry, +25% refine",
+    },
+    "banking_network": {
+        "name": "Banking Network", "emoji": "🏦",
+        "cost": 400_000,
+        "boosts": {"invest": 0.30, "tax": 0.20, "market_sell": 0.10},
+        "desc": "+30% invest returns, +20% tax, +10% market sell",
+        "requires": "trade_charter",
+    },
+    "grain_silo": {
+        "name": "Grain Silo", "emoji": "🌾",
+        "cost": 150_000,
+        "boosts": {"farm": 0.20, "food_storage": 1.0},
+        "desc": "+20% farm, prevents food loss during famines",
+        "requires": "tractor",
+    },
+}
+
+# ================================================================
+# MARKET — NPC shop with 48h restock cycle (new)
+# ================================================================
+MARKET = {
+    "restock_interval_hours": 48,
+    "price_variance": 0.15,           # ±15% per restock
+    "starting_prices": {
+        "gold":   {"buy": 100,  "sell": 90},
+        "food":   {"buy": 8,    "sell": 6},
+        "wood":   {"buy": 10,   "sell": 8},
+        "stone":  {"buy": 12,   "sell": 10},
+        "tools":  {"buy": 500,  "sell": 450},
+        "metal":  {"buy": 800,  "sell": 700},
+        "luxury": {"buy": 2500, "sell": 2200},
+        "rations": {"buy": 200, "sell": 170},
+        "weapons": {"buy": 3000, "sell": 2700},
+    },
+    "stock_per_cycle": {
+        "food":    50_000,
+        "wood":    30_000,
+        "stone":   30_000,
+        "gold":    100_000,
+        "tools":   500,
+        "metal":   300,
+        "luxury":  100,
+        "rations": 200,
+        "weapons": 50,
+    },
+    "stock_regen_per_hour": {
+        "food":  500,
+        "wood":  300,
+        "stone": 300,
+    },
+    "min_buy": 100,
+    "max_single_transaction": 50_000,
+    "smuggle": {
+        "price_mult": 1.40,
+        "detection_chance": 0.30,
+        "sanction_hours": 12,
+        "loss_on_detect": 0.50,
+        "cooldown_seconds": 1800,     # 30 min
+    },
+}
+
+# ================================================================
+# REFINERY — resource chains (new)
+# ================================================================
+REFINERY = {
+    "chains": {
+        "rations": {
+            "name": "Rations", "emoji": "🍱",
+            "inputs": {"food": 300, "gold": 50},
+            "output": 1,
+            "tech_required": 2,
+            "desc": "Soldier food supply. Boosts military morale.",
+        },
+        "tools": {
+            "name": "Tools", "emoji": "🔧",
+            "inputs": {"wood": 500, "stone": 200},
+            "output": 1,
+            "tech_required": 3,
+            "desc": "Craft goods. Sold high or used in weapon chains.",
+        },
+        "metal": {
+            "name": "Metal", "emoji": "🔩",
+            "inputs": {"stone": 800, "gold": 100},
+            "output": 1,
+            "tech_required": 4,
+            "desc": "Refined ore. Needed for weapons and megaprojects.",
+        },
+        "weapons": {
+            "name": "Weapons", "emoji": "⚔️",
+            "inputs": {"metal": 1, "tools": 1},
+            "output": 10,
+            "tech_required": 5,
+            "desc": "Equip 10 soldiers with better gear. Boost combat.",
+        },
+        "luxury": {
+            "name": "Luxury Goods", "emoji": "💎",
+            "inputs": {"wood": 200, "food": 100, "gold": 50},
+            "output": 1,
+            "tech_required": 6,
+            "desc": "Trade goods. Sells for high prices, raises happiness.",
+        },
+    },
+    "batch_multiplier": 1.0,           # applied to all outputs
+    "happiness_per_luxury_sold": 0.5,  # selling luxury goods raises happiness
+}
+
+# ================================================================
+# CLIMATE — terrain types with big positives AND big negatives (new)
+# ================================================================
+CLIMATE_TYPES = {
+    "temperate": {
+        "name": "Temperate", "emoji": "🌤️",
+        "desc": "Mild climate. Industrial backbone of the world.",
+        "modifiers": {"farming": 1.00, "mining": 0.80, "industry": 1.25, "trade": 1.10},
+        "pros": ["+25% industry", "+10% trade"],
+        "cons": ["−20% mining"],
+    },
+    "mediterranean": {
+        "name": "Mediterranean", "emoji": "🍇",
+        "desc": "Sun-drenched coasts. Wine, olives, and shipping lanes.",
+        "modifiers": {"farming": 1.30, "mining": 0.65, "industry": 0.95, "trade": 1.25},
+        "pros": ["+30% farming", "+25% trade"],
+        "cons": ["−35% mining"],
+    },
+    "plains": {
+        "name": "Fertile Plains", "emoji": "🌾",
+        "desc": "Breadbaskets of the world. Huge farmlands, poor ore.",
+        "modifiers": {"farming": 1.50, "mining": 0.70, "industry": 0.95, "trade": 0.85},
+        "pros": ["+50% farming"],
+        "cons": ["−30% mining", "−15% trade"],
+    },
+    "boreal": {
+        "name": "Boreal Forest", "emoji": "🌲",
+        "desc": "Cold northern woods. Timber, furs, and ore.",
+        "modifiers": {"farming": 0.50, "mining": 1.20, "industry": 1.05, "trade": 0.90},
+        "pros": ["+20% mining", "+5% industry"],
+        "cons": ["−50% farming"],
+    },
+    "tundra": {
+        "name": "Tundra", "emoji": "❄️",
+        "desc": "Frozen ground. Miners and smelters thrive, farms die.",
+        "modifiers": {"farming": 0.40, "mining": 1.30, "industry": 1.15, "trade": 0.90},
+        "pros": ["+30% mining", "+15% industry"],
+        "cons": ["−60% farming"],
+    },
+    "arctic": {
+        "name": "Polar", "emoji": "🧊",
+        "desc": "Ice and research stations. Nothing grows, but the drills never stop.",
+        "modifiers": {"farming": 0.20, "mining": 1.30, "industry": 1.00, "trade": 0.80},
+        "pros": ["+30% mining", "Unique discoveries"],
+        "cons": ["−80% farming"],
+    },
+    "desert": {
+        "name": "Desert", "emoji": "🏜️",
+        "desc": "Sand and sun. Oil, gold, and salt beneath the dunes.",
+        "modifiers": {"farming": 0.30, "mining": 1.60, "industry": 1.00, "trade": 1.40},
+        "pros": ["+60% mining", "+40% trade (oil)"],
+        "cons": ["−70% farming"],
+    },
+    "steppe": {
+        "name": "Steppe", "emoji": "🌿",
+        "desc": "Dry grassland. Grain, herds, and horses.",
+        "modifiers": {"farming": 1.20, "mining": 1.25, "industry": 0.90, "trade": 0.75},
+        "pros": ["+25% mining", "+20% farming"],
+        "cons": ["−25% trade"],
+    },
+    "tropical": {
+        "name": "Tropical", "emoji": "🌴",
+        "desc": "Hot, wet, and lush. Crops and timber thrive.",
+        "modifiers": {"farming": 1.45, "mining": 0.85, "industry": 0.65, "trade": 1.00},
+        "pros": ["+45% farming", "+40% wood"],
+        "cons": ["−35% industry"],
+    },
+    "monsoon": {
+        "name": "Monsoon", "emoji": "🌧️",
+        "desc": "Heavy rains. Rice paddies yield plenty.",
+        "modifiers": {"farming": 1.70, "mining": 0.70, "industry": 0.85, "trade": 0.95},
+        "pros": ["+70% farming"],
+        "cons": ["−30% mining"],
+    },
+    "mountainous": {
+        "name": "Mountainous", "emoji": "⛰️",
+        "desc": "Rugged terrain. Rich in ore, hard to farm.",
+        "modifiers": {"farming": 0.55, "mining": 1.55, "industry": 1.00, "trade": 0.75},
+        "pros": ["+55% mining", "+30% defense"],
+        "cons": ["−45% farming", "−25% trade"],
+    },
+    "coastal": {
+        "name": "Coastal", "emoji": "🌊",
+        "desc": "Sea-faring nations. Trade hubs and fishing fleets.",
+        "modifiers": {"farming": 0.90, "mining": 0.60, "industry": 0.95, "trade": 1.40},
+        "pros": ["+40% trade", "+35% fish"],
+        "cons": ["−40% mining"],
+    },
+    "island": {
+        "name": "Island", "emoji": "🏝️",
+        "desc": "Isolated specks of land. Trade and fishing, nothing else.",
+        "modifiers": {"farming": 0.85, "mining": 0.50, "industry": 0.70, "trade": 1.50},
+        "pros": ["+50% trade", "+40% fish", "Naval advantage"],
+        "cons": ["−50% mining", "−30% industry"],
+    },
+}
+
+# Country → climate mapping. Covers all ~180 countries with geojson data.
+# (Small nations like Monaco, Vatican, Liechtenstein, etc. are intentionally omitted.)
+PROVINCE_CLIMATE = {
+    # ---- Europe ----
+    "France": "temperate",
+    "Germany": "temperate",
+    "United Kingdom": "coastal",
+    "Ireland": "coastal",
+    "Netherlands": "coastal",
+    "Belgium": "temperate",
+    "Luxembourg": "temperate",
+    "Switzerland": "mountainous",
+    "Austria": "mountainous",
+    "Poland": "plains",
+    "Czechia": "temperate",
+    "Czech Republic": "temperate",
+    "Slovakia": "mountainous",
+    "Hungary": "plains",
+    "Romania": "temperate",
+    "Bulgaria": "temperate",
+    "Ukraine": "plains",
+    "Belarus": "boreal",
+    "Moldova": "plains",
+    "Russia": "boreal",
+    "Portugal": "mediterranean",
+    "Spain": "mediterranean",
+    "Italy": "mediterranean",
+    "Greece": "mediterranean",
+    "Croatia": "mediterranean",
+    "Slovenia": "mountainous",
+    "Bosnia and Herzegovina": "mountainous",
+    "Bosnia and Herz.": "mountainous",
+    "Serbia": "temperate",
+    "Montenegro": "mountainous",
+    "Albania": "mediterranean",
+    "North Macedonia": "mountainous",
+    "Macedonia": "mountainous",
+    "Kosovo": "mountainous",
+    "Cyprus": "mediterranean",
+    "N. Cyprus": "mediterranean",
+    "Norway": "boreal",
+    "Sweden": "boreal",
+    "Finland": "boreal",
+    "Denmark": "coastal",
+    "Iceland": "tundra",
+    "Estonia": "boreal",
+    "Latvia": "boreal",
+    "Lithuania": "boreal",
+    "Greenland": "arctic",
+
+    # ---- Asia ----
+    "Kazakhstan": "steppe",
+    "Uzbekistan": "steppe",
+    "Turkmenistan": "desert",
+    "Kyrgyzstan": "mountainous",
+    "Tajikistan": "mountainous",
+    "Afghanistan": "mountainous",
+    "China": "temperate",
+    "Japan": "island",
+    "South Korea": "temperate",
+    "Korea": "temperate",
+    "North Korea": "mountainous",
+    "Dem. Rep. Korea": "mountainous",
+    "Mongolia": "steppe",
+    "Taiwan": "island",
+    "India": "monsoon",
+    "Pakistan": "desert",
+    "Bangladesh": "monsoon",
+    "Sri Lanka": "tropical",
+    "Nepal": "mountainous",
+    "Bhutan": "mountainous",
+    "Thailand": "tropical",
+    "Vietnam": "monsoon",
+    "Indonesia": "tropical",
+    "Philippines": "island",
+    "Malaysia": "tropical",
+    "Singapore": "island",
+    "Cambodia": "tropical",
+    "Laos": "tropical",
+    "Timor-Leste": "tropical",
+    "Brunei": "tropical",
+    "Myanmar": "tropical",
+    "Turkey": "mediterranean",
+    "Iran": "desert",
+    "Iraq": "desert",
+    "Syria": "desert",
+    "Lebanon": "mediterranean",
+    "Israel": "mediterranean",
+    "Palestine": "mediterranean",
+    "Jordan": "desert",
+    "Saudi Arabia": "desert",
+    "Yemen": "desert",
+    "Oman": "desert",
+    "United Arab Emirates": "desert",
+    "UAE": "desert",
+    "Qatar": "desert",
+    "Kuwait": "desert",
+    "Bahrain": "desert",
+    "Georgia": "mountainous",
+    "Armenia": "mountainous",
+    "Azerbaijan": "mountainous",
+
+    # ---- Africa ----
+    "Morocco": "mediterranean",
+    "Algeria": "desert",
+    "Tunisia": "mediterranean",
+    "Libya": "desert",
+    "Egypt": "desert",
+    "Western Sahara": "desert",
+    "W. Sahara": "desert",
+    "Mauritania": "desert",
+    "Senegal": "steppe",
+    "Gambia": "tropical",
+    "Mali": "desert",
+    "Burkina Faso": "steppe",
+    "Benin": "tropical",
+    "Togo": "tropical",
+    "Ghana": "tropical",
+    "Ivory Coast": "tropical",
+    "Côte d'Ivoire": "tropical",
+    "Liberia": "tropical",
+    "Sierra Leone": "tropical",
+    "Guinea": "tropical",
+    "Guinea-Bissau": "tropical",
+    "Cape Verde": "island",
+    "Nigeria": "tropical",
+    "Niger": "desert",
+    "Chad": "desert",
+    "Cameroon": "tropical",
+    "Central African Republic": "tropical",
+    "Central African Rep.": "tropical",
+    "C.A.R.": "tropical",
+    "DR Congo": "tropical",
+    "Democratic Republic of the Congo": "tropical",
+    "Dem. Rep. Congo": "tropical",
+    "Congo (Kinshasa)": "tropical",
+    "Republic of Congo": "tropical",
+    "Republic of the Congo": "tropical",
+    "Congo (Brazzaville)": "tropical",
+    "Congo": "tropical",
+    "Gabon": "tropical",
+    "Equatorial Guinea": "tropical",
+    "Eq. Guinea": "tropical",
+    "Sao Tome and Principe": "tropical",
+    "Sudan": "desert",
+    "South Sudan": "tropical",
+    "S. Sudan": "tropical",
+    "Eritrea": "desert",
+    "Ethiopia": "mountainous",
+    "Djibouti": "desert",
+    "Somalia": "desert",
+    "Somaliland": "desert",
+    "Kenya": "steppe",
+    "Uganda": "tropical",
+    "Rwanda": "mountainous",
+    "Burundi": "mountainous",
+    "Tanzania": "steppe",
+    "United Republic of Tanzania": "steppe",
+    "Mozambique": "tropical",
+    "Madagascar": "tropical",
+    "Comoros": "island",
+    "Seychelles": "island",
+    "Mauritius": "island",
+    "Angola": "tropical",
+    "Zambia": "steppe",
+    "Malawi": "tropical",
+    "Zimbabwe": "steppe",
+    "Botswana": "desert",
+    "Namibia": "desert",
+    "South Africa": "steppe",
+    "Eswatini": "steppe",
+    "eSwatini": "steppe",
+    "Swaziland": "steppe",
+    "Lesotho": "mountainous",
+
+    # ---- North America ----
+    "Canada": "boreal",
+    "United States": "temperate",
+    "United States of America": "temperate",
+    "USA": "temperate",
+    "US": "temperate",
+    "Mexico": "desert",
+    "Guatemala": "tropical",
+    "Belize": "tropical",
+    "Honduras": "tropical",
+    "El Salvador": "tropical",
+    "Nicaragua": "tropical",
+    "Costa Rica": "tropical",
+    "Panama": "tropical",
+
+    # ---- Caribbean ----
+    "Cuba": "tropical",
+    "Haiti": "tropical",
+    "Dominican Republic": "tropical",
+    "Dominican Rep.": "tropical",
+    "Jamaica": "tropical",
+    "Bahamas": "island",
+    "Trinidad and Tobago": "tropical",
+    "Barbados": "island",
+    "Saint Lucia": "island",
+    "St. Lucia": "island",
+    "Grenada": "island",
+    "Antigua and Barbuda": "island",
+    "Dominica": "island",
+    "St. Kitts and Nevis": "island",
+    "Saint Kitts and Nevis": "island",
+    "Saint Vincent and the Grenadines": "island",
+    "St. Vincent": "island",
+
+    # ---- South America ----
+    "Venezuela": "tropical",
+    "Colombia": "tropical",
+    "Guyana": "tropical",
+    "Suriname": "tropical",
+    "French Guiana": "tropical",
+    "Ecuador": "tropical",
+    "Peru": "mountainous",
+    "Bolivia": "mountainous",
+    "Chile": "desert",
+    "Brazil": "tropical",
+    "Argentina": "steppe",
+    "Uruguay": "plains",
+    "Paraguay": "tropical",
+    "Falkland Is.": "tundra",
+
+    # ---- Oceania ----
+    "Australia": "desert",
+    "New Zealand": "temperate",
+    "Fiji": "island",
+    "Solomon Islands": "tropical",
+    "Solomon Is.": "tropical",
+    "Vanuatu": "island",
+    "Papua New Guinea": "tropical",
+    "Samoa": "island",
+    "Tonga": "island",
+    "Micronesia": "island",
+    "Marshall Islands": "island",
+    "Marshall Is.": "island",
+    "Palau": "island",
+    "Nauru": "island",
+    "Kiribati": "island",
+    "Tuvalu": "island",
+
+    # ---- Antarctica ----
+    "Antarctica": "arctic",
+}
+
+# ================================================================
+# MILITARY
+# ================================================================
 MILITARY = {
     "soldier_buy_cost": 20, "tech_upgrade_cost": 500,
     "train_cost_soldier_gold": 50, "train_cost_soldier_food": 10,
@@ -113,6 +719,10 @@ COOLDOWNS = {
     "tax": 5, "lottery": 1, "invest": 5, "advertise": 5,
     "immigration": 5, "sell": 0, "festival": 2, "cheer": 1, "cheerup": 5,
     "buytech": 0, "buysoldiers": 0, "buyspys": 0, "burn": 0, "buycard": 0,
+    # New
+    "workforce": 0, "assign": 0, "unassign": 0,
+    "refine": 3, "market": 0, "market_buy": 0, "market_sell": 0,
+    "smuggle": 30, "tools": 0, "tools_buy": 0,
 
     "train": 2, "find": 1, "attack": 3, "siege": 10,
     "stealthbattle": 4, "navalattack": 3, "airattack": 3,
@@ -126,7 +736,7 @@ COOLDOWNS = {
     "mail": 0, "inbox": 0, "coalition": 0,
     "sanction": 0, "liftsanction": 0, "sanctions": 0,
 
-    "blackmarket": 0, "store": 0, "inventory": 0, "market": 0,
+    "blackmarket": 0, "store": 0, "inventory": 0, "market_store": 0,
     "expand": 0, "rapidexpansion": 0, "territories": 0,
     "map": 0,
     "reclaim": 0, "civilwar": 0,
@@ -154,6 +764,7 @@ COOLDOWNS = {
     "superspy": 10, "megainvent": 5, "backstab": 180, "bomb": 1,
     "nuke": 5, "obliterate": 13, "sacrifice": 1440,
     "clone": 30, "fakeflag": 30, "glitch_protocol": 30,
+    "bankraid": 0,
 
     "megaproject": 0, "policy": 0, "policieshelp": 0,
     "bank": 0, "bank_deposit": 0, "bank_withdraw": 0,
@@ -170,22 +781,23 @@ COOLDOWNS = {
     "doctrine": 0, "setdoctrine": 0,
     "tactics": 0,
 
-    # Corporations
     "corp": 0, "corp_build": 0,
     "corp_leaderboard": 0, "corp_takeover": 0,
 
-    # Dailies
     "daily": 0, "streak": 0,
 }
 
 CAPS = {
-    "gather": 2000000, "work": 5000000, "farm": 2000000,
-    "mine_stone": 1000000, "mine_wood": 1000000,
-    "harvest": 5000000, "drill_gold": 8000000, "drill_stone": 4000000,
-    "fish": 1000000, "tax": 600000, "raidcaravan": 8000000,
-    "labor": 3000000, "advertise": 20000, "immigration": 2500, "sell": 50000,
+    "gather": 500_000, "work": 1_000_000, "farm": 200_000,
+    "mine_stone": 150_000, "mine_wood": 150_000,
+    "harvest": 500_000, "drill_gold": 500_000, "drill_stone": 250_000,
+    "fish": 200_000, "tax": 600_000, "raidcaravan": 8_000_000,
+    "labor": 3_000_000, "advertise": 20_000, "immigration": 2_500, "sell": 50_000,
 }
 
+# ================================================================
+# IDEOLOGY MODIFIERS
+# ================================================================
 IDEOLOGY_MODIFIERS = {
     "fascism": {"soldier_training_speed": 1.25, "diplomacy_success": 0.85, "luck_modifier": 0.90},
     "democracy": {"happiness_boost": 1.20, "trade_profit": 1.10, "soldier_training_speed": 0.85},
@@ -356,34 +968,25 @@ POWER_CURVE = {
 
 FACTIONS = {
     "military": {
-        "name": "Military",
-        "emoji": "⚔️",
+        "name": "Military", "emoji": "⚔️",
         "desc": "Wants war, borders, and glory. Angered by peace and passivity.",
-        "warning_threshold": 20,
-        "danger_threshold": 10,
-        "blessing_threshold": 80,
+        "warning_threshold": 20, "danger_threshold": 10, "blessing_threshold": 80,
         "blessing_effect": {"soldier_strength_mult": 1.15},
         "bane_effect": {"soldier_training_speed": 0.75},
         "civil_war_rebel_kind": "military",
     },
     "merchant": {
-        "name": "Merchant",
-        "emoji": "💰",
+        "name": "Merchant", "emoji": "💰",
         "desc": "Wants trade, treaties, and profit. Angered by war and blockades.",
-        "warning_threshold": 20,
-        "danger_threshold": 10,
-        "blessing_threshold": 80,
+        "warning_threshold": 20, "danger_threshold": 10, "blessing_threshold": 80,
         "blessing_effect": {"gold_income_mult": 1.10},
         "bane_effect": {"gold_income_mult": 0.80},
         "civil_war_rebel_kind": "merchant",
     },
     "people": {
-        "name": "People",
-        "emoji": "👥",
+        "name": "People", "emoji": "👥",
         "desc": "Wants food, safety, and low taxes. Angered by labor and heavy taxation.",
-        "warning_threshold": 20,
-        "danger_threshold": 10,
-        "blessing_threshold": 80,
+        "warning_threshold": 20, "danger_threshold": 10, "blessing_threshold": 80,
         "blessing_effect": {"happiness_boost": 5, "population_growth": 1.02},
         "bane_effect": {"resource_income_mult": 0.80},
         "civil_war_rebel_kind": "people",
@@ -412,6 +1015,16 @@ FACTION_EFFECTS = {
     "immigration_riot": {"people": -4},
     "build_corporation": {"merchant": +4},
     "build_megaproject": {"merchant": +3, "military": +2},
+
+    # New workforce/faction interplay
+    "assign_industry": {"military": +1},
+    "assign_trade":    {"merchant": +1},
+    "assign_farming":  {"people": +1},
+    "refine":          {"merchant": +2, "military": -1},
+    "market_buy":      {"merchant": +1},
+    "market_sell":     {"merchant": +2},
+    "smuggle":         {"merchant": +3, "people": -2},
+    "tool_purchase":   {"merchant": +1},
 
     "train_soldiers":   {"military": +4},
     "train_spies":      {"military": +2, "merchant": -2},
@@ -457,7 +1070,7 @@ SANCTIONS = {
     "resource_income_multiplier": 0.60,
     "happiness_penalty_per_tick": 3,
     "blocked_commands": [
-        "globaltrade", "trade",
+        "globaltrade", "trade", "market", "market_buy", "market_sell",
         "bank", "bank_deposit", "bank_withdraw", "bank_loan", "bank_repay",
     ],
 }
@@ -475,7 +1088,7 @@ BANKING = {
 }
 
 # ================================================================
-# PHASE 1 MILITARY — TACTICAL LAYER
+# MILITARY — TACTICAL LAYER
 # ================================================================
 DOCTRINES = {
     "mobile_warfare": {
@@ -712,7 +1325,7 @@ MAP_RENDER = {
 }
 
 # ================================================================
-# CORPORATIONS — CORE
+# CORPORATIONS
 # ================================================================
 INDUSTRIES = {
     "agriculture": {
@@ -796,9 +1409,6 @@ CORP_LIMITS = {
     "dividend_min": 1_000,
 }
 
-# ================================================================
-# CORPORATIONS — EXTENDED
-# ================================================================
 CORP_LEVEL_REQUIREMENTS = {
     "base_cost": 100_000,
     "cost_growth": 1.55,
@@ -897,11 +1507,10 @@ DAILY = {
     },
 }
 
-# Dopamine tier colors for embed borders
 DOPAMINE_COLORS = {
-    "common": 0x22c55e,   # green
-    "good":   0x3b82f6,   # blue
-    "great":  0xa855f7,   # purple
-    "epic":   0xf59e0b,   # amber
-    "legend": 0xff0080,   # hot pink
+    "common": 0x22c55e,
+    "good":   0x3b82f6,
+    "great":  0xa855f7,
+    "epic":   0xf59e0b,
+    "legend": 0xff0080,
 }

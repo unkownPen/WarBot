@@ -361,7 +361,7 @@ class StoreCommands(commands.Cog):
     # MARKET INFO
     # =================================================================
 
-    @commands.hybrid_command(name='market')
+    @commands.hybrid_command(name='bmhelp')
     async def market_info(self, ctx):
         embed = create_embed(
             "🕴️ Black Market Information",
